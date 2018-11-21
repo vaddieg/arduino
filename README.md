@@ -15,3 +15,4 @@ Required hardware:
 * Arduino ISP to flash the Atmega (or another flasher)
 
 ![image](humeter-bredboard.png)
+LCD connections might be not up-to-date. Check vs code comments
