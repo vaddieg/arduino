@@ -1,4 +1,4 @@
-# My Arduino projects from 2013
+# Old Arduino projects
 
 ## Humeter
 Indoor temperature and humidity meter, displaying daily averages, history graph and dew point. 
