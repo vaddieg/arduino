@@ -21,6 +21,7 @@
 //Geometry
 const int TRAIN_LEN=112; //mm
 const int TRACK_LEN=155*8+2*240*2; //2200mm outer length
+const int WORLD_SCALE=160; // N-scale 1:160
 
 // Pin definitions
 const int MOTOR_PWM_PIN = 3;
@@ -60,21 +61,21 @@ int demoStage = 0;
 
 // Autonomous DEMO mode, TODO
 enum demoStages {
-  DemoInit=0, //stop everything
-  DemoIntro1,
-  DemoIntro2,
-  DemoDetect,
-  DemoDetectSpeed,
-  DemoIntro3,
-  DemoWhistle,
-  DemoSlowdown,
-  DemoEnd
+	  DemoInit=0, //stop everything
+	  DemoIntro1,
+	  DemoIntro2,
+	  DemoDetect,
+	  DemoDetectSpeed,
+	  DemoIntro3,
+	  DemoWhistle,
+	  DemoSlowdown,
+	  DemoEnd
 };
 
 const char* stageStrs[] = {
    //0123456789ABCDEF
 	"",
-	"DEMO MODE\nWillkommen!\n",
+	"DEMO MODE\nWillkommen!",
 	"1982 Zug can\n fahren auch",
 	""
 };
@@ -123,56 +124,56 @@ void setup() {
 	OCR1A = 221;                        // 36 kHz
 	//OCR1A = 210; //38 kHz
 
-  
+	  
 }
 
 void loop() {
 	if (demoMode) {
 		updateDemoState();
-		return;
-	}
-	pollButtons();
-	if (pollSensors(detectedSpeed == -1)) {
-		playTone(400, 10);
-	}
-	updateMotor();
-	updateDisplay();
-	updateTrafficLights();
-	delay(50);
+			return;
+		}
+		pollButtons();
+		if (pollSensors(detectedSpeed == -1)) {
+			playTone(400, 10);
+		}
+		updateMotor();
+		updateDisplay();
+		updateTrafficLights();
+		delay(50);
 }
 
 bool _expectLevel(int lvl) {
-    // Lightup the BEAM!
-    TCCR1A |= _BV(COM1A0);
-    delayMicroseconds(500);
-    // Disable carrier
-    TCCR1A &= ~_BV(COM1A0);
-    digitalWrite(IR_BEAM, LOW);
+	// Lightup the BEAM!
+	TCCR1A |= _BV(COM1A0);
+	delayMicroseconds(500);
+	// Disable carrier
+	TCCR1A &= ~_BV(COM1A0);
+	digitalWrite(IR_BEAM, LOW);
 
-    return  digitalRead(IR_SENSOR) == lvl;
+	return  digitalRead(IR_SENSOR) == lvl;
 } 
 
 //blocks for 10s if called with detect speed 
 long pollSensors(bool detect_speed) {
   
 	if (_expectLevel(HIGH)) { // Beam interrupted
-      
-        long start_ts = millis();
-        //detectedSpeed = -1;
-        
-        if (!detect_speed) return start_ts;
 
-        while (millis() < start_ts + 10000) {//10s naive constant
-            delay(20);
-            if (_expectLevel(LOW)) {
-                detectedSpeed = constrain((long)TRAIN_LEN * 1000 / (millis() - start_ts), 1, 999);
-                return start_ts;
-            }
-            
-        }
-        
+		long start_ts = millis();
+		//detectedSpeed = -1;
+		
+		if (!detect_speed) return start_ts;
+
+		while (millis() < start_ts + 10000) {//10s naive constant
+			delay(20);
+			if (_expectLevel(LOW)) {
+					detectedSpeed = constrain((long)TRAIN_LEN * 1000 / (millis() - start_ts), 1, 999);
+					return start_ts;
+			}
+				
+		}
+		
 	}
-    return 0;
+  return 0;
 }
 
 void pollButtons() {
@@ -191,7 +192,7 @@ void pollButtons() {
 		detectedSpeed = -1;
 		//kickstart engine
 		setMotorSpeed(255);
-		delay(100);
+		delay(5);
 		setMotorSpeed(currentSpeed);
 		
 		playTone(440, 50);
@@ -199,9 +200,6 @@ void pollButtons() {
 	
 	// Control button 2 with debouncing
 	if (digitalRead(BUTTON_CONTROL_2) == LOW && (millis() - lastControl2Press) > 200) {
-		Serial.print("BTN 2\n");
-		// Emergency stop
-		setMotorSpeed(0);
 		lastControl2Press = millis();
 		//playWhistle();
 		whistleBlast(1500);
@@ -253,12 +251,12 @@ void updateDisplay() {
 	  
 		lcd.setCursor(0, 1);
 		lcd.print("Gsw:");
-        if (detectedSpeed >= 0) {
-		    lcd.print(detectedSpeed);
-            lcd.print("mm/s");
-        } else {
-            lcd.print("messen");
-        }
+		if (detectedSpeed >= 0) {
+    lcd.print(detectedSpeed);
+				lcd.print("mm/s");
+		} else {
+				lcd.print("messen");
+		}
 		lastRefresh = ts;
 	}
 }
@@ -266,27 +264,6 @@ void updateDisplay() {
 void playTone(int freq, int duration) {
 	tone(SPEAKER_PIN, freq, duration);
 	delay(duration);
-	noTone(SPEAKER_PIN);
-}
-
-void playWhistle() {
-   // Quick ascending sweep
- 	for (int freq = 2000; freq <= 3000; freq += 100) {
-		tone(SPEAKER_PIN, freq, 15);
-		delay(24);
-	}
-
-	for (int count=0; count < 30; count++) {
-		tone(SPEAKER_PIN, 3000, 22);
-		delay(25);
-	}
-	
-	// Quick descending sweep
-	for (int freq = 3000; freq >= 2000; freq -= 200) {
-		tone(SPEAKER_PIN, freq, 15);
-		delay(20);
-	}
-	
 	noTone(SPEAKER_PIN);
 }
 
@@ -332,31 +309,31 @@ void updateDemoState() {
 	static long detectionTS = 0;
 	static long stageTS = 0;
 	const char *str = NULL;
-	  bool timeout = (millis() - stageTS) > stageLengs[demoStage];
-	
-		switch (demoStage) {
-			case DemoInit:
-				//reset staic vars, stop motors, etc.
-			
-			break;
-			case DemoIntro1:
-				str = "DEMO MODE\nWillkommen!\n";
-			break;
-			case DemoIntro2:
-				str = "1982 Zug\nkann noch fahren\n";
-			break;
-			case DemoEnd:
-				demoMode = false;
-		}
-	
-		if (str) {
-			lcd.clear();
-			lcd.write(str);
-		}
-	
-		if (timeout) {
-			demoStage++;
-			stageTS = millis();
-		}
+	bool timeout = (millis() - stageTS) > stageLengs[demoStage];
+
+	switch (demoStage) {
+		case DemoInit:
+			//reset staic vars, stop motors, etc.
+		
+		break;
+		case DemoIntro1:
+			str = "DEMO MODE\nWillkommen!\n";
+		break;
+		case DemoIntro2:
+			str = "1982 Zug\nkann noch fahren\n";
+		break;
+		case DemoEnd:
+			demoMode = false;
+	}
+
+	if (str) {
+		lcd.clear();
+		lcd.write(str);
+	}
+
+	if (timeout) {
+		demoStage++;
+		stageTS = millis();
+	}
   
 }
