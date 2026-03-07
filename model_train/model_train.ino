@@ -54,7 +54,7 @@ const int LCD_REFRESH = 1000 / 5; // 5Hz
 const int MIN_PWM = 0;
 const int MAX_PWM = 255;
 int currentSpeed = 0;
-int detectedSpeed = -1;
+long detectedSpeed = -1;
 bool motorForward = true;
 bool demoMode = false;
 int demoStage = 0;
@@ -107,10 +107,11 @@ void setup() {
 	digitalWrite(LIGHT_2_PIN, LOW);
 	
 	lcd.begin(16, 2);
-	lcd.print("TT Eisenbahn v0.1");
+	lcd.print("N Eisenbahn v0.1");
 	lcd.setCursor(0, 1);
 	lcd.print("von Roman & Vad");
 	delay(1000);
+    lcd.clear();
 	
 	Serial.begin(9600);
 	
@@ -124,7 +125,11 @@ void setup() {
 	OCR1A = 221;                        // 36 kHz
 	//OCR1A = 210; //38 kHz
 
-	  
+	//Motor PWM (Timer2) default is 490
+    //3TCCR2B = TCCR2B & B11111000 | B00000011; // 980.39 Hz
+    //TCCR2B = TCCR2B & B11111000 | B00000110; //  122.55 Hz
+    //TCCR2B = TCCR2B & B11111000 | B00000010; //  3921.16 Hz
+
 }
 
 void loop() {
@@ -134,7 +139,7 @@ void loop() {
 		}
 		pollButtons();
 		if (pollSensors(detectedSpeed == -1)) {
-			playTone(400, 10);
+			//playTone(400, 10);
 		}
 		updateMotor();
 		updateDisplay();
@@ -153,7 +158,7 @@ bool _expectLevel(int lvl) {
 	return  digitalRead(IR_SENSOR) == lvl;
 } 
 
-//blocks for 10s if called with detect speed 
+//can block for 10s if called with detect speed 
 long pollSensors(bool detect_speed) {
   
 	if (_expectLevel(HIGH)) { // Beam interrupted
@@ -162,18 +167,18 @@ long pollSensors(bool detect_speed) {
 		//detectedSpeed = -1;
 		
 		if (!detect_speed) return start_ts;
-
+        delay(100); //no train pass through in 0.1s
 		while (millis() < start_ts + 10000) {//10s naive constant
-			delay(20);
-			if (_expectLevel(LOW)) {
-					detectedSpeed = constrain((long)TRAIN_LEN * 1000 / (millis() - start_ts), 1, 999);
-					return start_ts;
+			delay(10); //poll at 100hz
+			if (_expectLevel(LOW)) { //BEAM restored
+				detectedSpeed = constrain((long)TRAIN_LEN * 1000 / (millis() - start_ts), 1, 999);
+				return start_ts;
 			}
 				
 		}
 		
 	}
-  return 0;
+    return 0;
 }
 
 void pollButtons() {
@@ -185,24 +190,24 @@ void pollButtons() {
 	// Control button 1 with debouncing
 	if (digitalRead(BUTTON_CONTROL_1) == LOW && (millis() - lastControl1Press) > 200) {
 		// Toggle direction
-		Serial.print("BTN 1\n");
+		//Serial.print("BTN 1\n");
 		motorForward = !motorForward;
 		setMotorDirection(motorForward);
 		lastControl1Press = millis();
 		detectedSpeed = -1;
 		//kickstart engine
 		setMotorSpeed(255);
-		delay(5);
+		delay(10);
 		setMotorSpeed(currentSpeed);
 		
-		playTone(440, 50);
+		//playTone(440, 50);
 	}
 	
 	// Control button 2 with debouncing
 	if (digitalRead(BUTTON_CONTROL_2) == LOW && (millis() - lastControl2Press) > 200) {
 		lastControl2Press = millis();
-		//playWhistle();
-		whistleBlast(1500);
+        setMotorSpeed(0); //tone() interferes w/ PWM
+		whistleBlast(1300);
 	}
 	
 	// Speed buttons with debouncing
@@ -226,7 +231,7 @@ void updateMotor() {
 	// Frequent calls drop PWM duty cycles
 	static long lastRefresh = 0;
 	long ts = millis();
-	if (ts - lastRefresh > 500) {
+	if (ts - lastRefresh > 200) {
 		setMotorSpeed(currentSpeed);
 		lastRefresh = ts;
 	}
@@ -245,6 +250,7 @@ void updateDisplay() {
 	long ts = millis();
 	if (ts - lastRefresh > LCD_REFRESH) {
 		lcd.setCursor(0, 0);
+        //lcd.clear(); //clear is slow
 		lcd.print("Lst:");
 		lcd.print(currentSpeed * 100 / 255);
 		lcd.print("%  ");
@@ -254,8 +260,10 @@ void updateDisplay() {
 		if (detectedSpeed >= 0) {
     lcd.print(detectedSpeed);
 				lcd.print("mm/s");
+                lcd.print(" ");
+                lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
 		} else {
-				lcd.print("messen");
+				lcd.print("messen...    ");
 		}
 		lastRefresh = ts;
 	}
