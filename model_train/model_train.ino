@@ -254,12 +254,12 @@ void updateDisplay() {
 		lcd.setCursor(0, 1);
 		lcd.print("Gsw:");
 		if (detectedSpeed >= 0) {
-    lcd.print(detectedSpeed);
-				lcd.print("mm/s");
-                lcd.print(" ");
-                lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
+			lcd.print(detectedSpeed);
+			lcd.print("mm/s");
+            lcd.print(" ");
+            lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
 		} else {
-				lcd.print("messen...    ");
+			lcd.print("messen...    ");
 		}
 		lastRefresh = ts;
 	}
@@ -280,7 +280,7 @@ void whistleBlast(int totalDuration) {
 	
 		float progress = float(now - start) / totalDuration;
 		
-		// ---- Attack Phase (first 30%) ----
+		// Attack Phase (first 30%)
 		if (progress < 0.1) {
 		  int freq = 2500 + progress * 3000;   // rise from 2.5kHz to ~3.4kHz
 		  tone(SPEAKER_PIN, freq);
@@ -289,7 +289,7 @@ void whistleBlast(int totalDuration) {
 		  delay(10);
 		}
 		
-		// ---- Full Chaos Phase ----
+		// Chaos Phase
 		else {
 		  int freq = random(2600, 3000);
 		  tone(SPEAKER_PIN, freq);
