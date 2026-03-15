@@ -10,19 +10,22 @@
 
 //Geometry
 const int TRAIN_LEN=112; //locomotive, mm
-const int TRACK_LEN=155*8+2*240*2; //2200mm outer length
+const int TRACK_LEN=160*8+2*240; //1760mm outer loop length
 const int WORLD_SCALE=160; // N-scale 1:160
 
+//Fine-tunes
+const int MOTOR_CUTOFF=28; //%, doesn't move at lower PWM duty
+
 // Pin definitions
+// Note: A6 A7 have no pull-up
 const int MOTOR_PWM_PIN = 5; //D3 and D11 are affected by tone()
 const int MOTOR_RELAY_PIN = 4; //Not installed yet
 const int SPEAKER_PIN = 3;
-const int RED_LED = A3;
+const int RED_LED = A3; 
 const int GREEN_LED = A2;
 
-//A6 A7 have no pull-up
-const int BUTTON_CONTROL_1 = A4;
-const int BUTTON_CONTROL_2 = A5;
+const int BUTTON_CONTROL_1 = A4;//toggle direction, trigger speed measure
+const int BUTTON_CONTROL_2 = A5;//play whistle
 const int BUTTON_SPEED_UP = A0;
 const int BUTTON_SPEED_DOWN = A1;
 
@@ -31,7 +34,7 @@ const int IR_BEAM = 9;
 const int IR_SENSOR = 2;
 
 // LCD pins (4-bit mode)
-// We try to use right-side pins to drive LCD
+// We try to use right-side pins to drive LCD, avoiding wire intersections
 const int LCD_RS = 6;
 const int LCD_EN = 7;
 const int LCD_D4 = 8;
@@ -43,7 +46,9 @@ const int LCD_REFRESH = 1000 / 5; // 5Hz
 // Motor control
 const int MIN_PWM = 0;
 const int MAX_PWM = 255;
-int currentSpeed = 0;
+
+// Global vars
+int pwmDuty = 0;
 long detectedSpeed = -1;
 unsigned long lastDetectionTS = 0;
 unsigned loops = 0; 
@@ -109,7 +114,7 @@ void setup() {
 	lcd.print("N Eisenbahn v0.1");
 	lcd.setCursor(0, 1);
 	lcd.print("von Roman & Vad");
-	delay(1000);
+	delay(2000);
     lcd.clear();
 	
 	Serial.begin(9600);
@@ -190,7 +195,6 @@ void pollButtons() {
 	// Control button 1 with debouncing
 	if (digitalRead(BUTTON_CONTROL_1) == LOW && (millis() - lastControl1Press) > 200) {
 		// Toggle direction
-		//Serial.print("BTN 1\n");
 		motorForward = !motorForward;
 		setMotorDirection(motorForward);
 		lastControl1Press = millis();
@@ -198,25 +202,30 @@ void pollButtons() {
 		//kickstart engine
 		setMotorSpeed(255);
 		delay(10);
-		setMotorSpeed(currentSpeed);
+		setMotorSpeed(pwmDuty);
 	}
 	
 	// Control button 2 with debouncing
 	if (digitalRead(BUTTON_CONTROL_2) == LOW && (millis() - lastControl2Press) > 200) {
+		//two buttons simultaneously
+		if (lastControl1Press - lastControl2Press < 200) {
+			demoMode = true;
+			return;
+		}
 		lastControl2Press = millis();
 		whistleBlast(1500); //During the whistle sensor is inactive
 	}
 	
 	// Speed buttons with autorepeat
 	if (digitalRead(BUTTON_SPEED_UP) == LOW/* && speedUpLocked*/) {
-		currentSpeed = min(currentSpeed + 1, MAX_PWM);
+		pwmDuty = min(pwmDuty + 1, MAX_PWM);
 		speedUpLocked = false;
 	} else if (digitalRead(BUTTON_SPEED_UP) == HIGH) {
 		speedUpLocked = true;
 	}
 	
 	if (digitalRead(BUTTON_SPEED_DOWN) == LOW/* && speedDownLocked*/) {
-		currentSpeed = max(currentSpeed - 1, MIN_PWM);
+		pwmDuty = max(pwmDuty - 1, MIN_PWM);
 		speedDownLocked = false;
 	} else if (digitalRead(BUTTON_SPEED_DOWN) == HIGH) {
 		speedDownLocked = true;
@@ -229,7 +238,7 @@ void updateMotor() {
 	static long lastRefresh = 0;
 	long ts = millis();
 	if (ts - lastRefresh > 100) {
-		setMotorSpeed(currentSpeed);
+		setMotorSpeed(pwmDuty);
 		lastRefresh = ts;
 	}
 }
@@ -248,7 +257,7 @@ void updateDisplay() {
 	if (ts - lastRefresh > LCD_REFRESH) {
 		lcd.setCursor(0, 0); //clear is slow
 		lcd.print("Lst:");
-		lcd.print(currentSpeed * 100 / 255);
+		lcd.print(pwmDuty * 100 / 255);
 		lcd.print("%  ");
 	  
 		lcd.setCursor(0, 1);
@@ -275,16 +284,15 @@ void whistleBlast(int totalDuration) {
 	unsigned long start = millis();
 	unsigned long now;
 	
-	//TODO get rid of float
 	while ((now = millis()) - start < totalDuration) {
-	
-		float progress = float(now - start) / totalDuration;
+
+		unsigned long progr = (now - start) * 100 / totalDuration;
 		
-		// Attack Phase (first 30%)
-		if (progress < 0.1) {
-		  int freq = 2500 + progress * 3000;   // rise from 2.5kHz to ~3.4kHz
+		// Attack Phase (first 10%)
+		if (progr < 10) {
+		  int freq = 2500 + progr * 30;   // rise from 2.5kHz to ~3.4kHz
 		  tone(SPEAKER_PIN, freq);
-		  delay(15 + (20 * (0.3 - progress))); // more interruptions early
+		  delay(15 + (20 * (10 - progr))); // more interruptions early
 		  noTone(SPEAKER_PIN);
 		  delay(10);
 		}
@@ -304,25 +312,34 @@ void whistleBlast(int totalDuration) {
 void updateTrafficLights() {
 	digitalWrite(RED_LED, detectedSpeed >= 0 ? LOW : HIGH);
   
-  	digitalWrite(GREEN_LED, currentSpeed > 0 ? HIGH : LOW);
+  	digitalWrite(GREEN_LED, pwmDuty > 0 ? HIGH : LOW);
 }
 
 void updateDemoState() {
+	//Common logic for diving throug stages:
+	//switch-case executed only once per stage and can block
+	
 	static long detectionTS = 0;
 	static long stageTS = 0;
-	const char *str = NULL;
-	bool timeout = (millis() - stageTS) > stageLengs[demoStage];
+	
+	const char *str1 = nullptr;
+	const char *str2 = nullptr;
 
+	bool timeout = stageLengs[demoStage] == 0 || ((millis() - stageTS) > stageLengs[demoStage]);
+	if (!timeout) return;
+	
 	switch (demoStage) {
 		case DemoInit:
 			//reset staic vars, stop motors, etc.
+			detectedSpeed=-1;
 		
 		break;
 		case DemoIntro1:
-			str = "DEMO MODE\nWillkommen!\n";
+			str1 = "DEMO MODE"
+			str2 = "Willkommen!";
 		break;
 		case DemoIntro2:
-			str = "1982 Zug\nkann noch fahren\n";
+			str1 = "1982 Zug\nkann noch fahren\n";
 		break;
 		case DemoEnd:
 			demoMode = false;
@@ -333,8 +350,10 @@ void updateDemoState() {
 		lcd.write(str);
 	}
 
+	timeout = stageLengs[demoStage] == 0 || ((millis() - stageTS) > stageLengs[demoStage]);
+
 	if (timeout) {
-		demoStage++;
+		demoStage++; //TODO handle overflow
 		stageTS = millis();
 	}
   
