@@ -11,10 +11,11 @@
 //Geometry
 const int TRAIN_LEN=112; //locomotive, mm
 const int TRACK_LEN=160*8+2*240; //1760mm outer loop length
+const int STA_DIST=160*3+240; //From sensor to station, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-const int MOTOR_CUTOFF=28; //%, doesn't move at lower PWM duty
+const int MOTOR_CUTOFF=28 * 100 / 255; //%, doesn't move at lower PWM duty
 
 // Pin definitions
 // Note: A6 A7 have no pull-up
@@ -57,33 +58,20 @@ bool motorForward = true;
 bool demoMode = false;
 int demoStage = 0;
 
-// Autonomous DEMO mode, TODO
+// Autonomous DEMO mode
 enum DemoStages {
 	DemoInit = 0,
 	DemoIntro1,
 	DemoIntro2,
-	DemoDetect,
-	DemoDetectSpeed,
 	DemoIntro3,
-	DemoWhistle,
+	DemoDetectSpeed,
 	DemoSlowdown,
 	DemoStationStop,
 	DemoStationWait,
-	DemoRestart,
 	DemoEnd
 };
+const int stageLengs[] = {0, 2000, 2000, 2000, 0, 0, 10000, 5000, 0};
 
-const char* stageStrs[] = {
-   //0123456789ABCDEF
-	"",
-	"Willkommen!",
-	"1982 Zug fährt",
-	"Hier ist er!",
-	"",
-	"",
-	
-};
-const int stageLengs[] = {0, 2000, 2000, 4000};
 
 // LCD setup
 LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
@@ -129,10 +117,7 @@ void setup() {
 	OCR1A = 221;                        // 36 kHz
 	//OCR1A = 210; //38 kHz
 
-	//Motor PWM (Timer2) default is 490 (ok)
-    //3TCCR2B = TCCR2B & B11111000 | B00000011; // 980.39 Hz - ok
-    //TCCR2B = TCCR2B & B11111000 | B00000110; //  122.55 Hz - to be testeed
-    //TCCR2B = TCCR2B & B11111000 | B00000010; //  3921.16 Hz - bad
+	//Motor PWM (Timer2) default is 490 (up to 1kHz is ok)
 
 }
 
@@ -189,8 +174,6 @@ long pollTrainSensor(bool detect_speed) {
 void pollButtons() {
 	static long lastControl1Press = 0;
 	static long lastControl2Press = 0;
-	static bool speedUpLocked = true;
-	static bool speedDownLocked = true;
 	
 	// Control button 1 with debouncing
 	if (digitalRead(BUTTON_CONTROL_1) == LOW && (millis() - lastControl1Press) > 200) {
@@ -217,18 +200,12 @@ void pollButtons() {
 	}
 	
 	// Speed buttons with autorepeat
-	if (digitalRead(BUTTON_SPEED_UP) == LOW/* && speedUpLocked*/) {
+	if (digitalRead(BUTTON_SPEED_UP) == LOW) {
 		pwmDuty = min(pwmDuty + 1, MAX_PWM);
-		speedUpLocked = false;
-	} else if (digitalRead(BUTTON_SPEED_UP) == HIGH) {
-		speedUpLocked = true;
 	}
 	
-	if (digitalRead(BUTTON_SPEED_DOWN) == LOW/* && speedDownLocked*/) {
+	if (digitalRead(BUTTON_SPEED_DOWN) == LOW) {
 		pwmDuty = max(pwmDuty - 1, MIN_PWM);
-		speedDownLocked = false;
-	} else if (digitalRead(BUTTON_SPEED_DOWN) == HIGH) {
-		speedDownLocked = true;
 	}
 	
 }
@@ -308,11 +285,10 @@ void whistleBlast(int totalDuration) {
 	}
 }
 
-
 void updateTrafficLights() {
 	digitalWrite(RED_LED, detectedSpeed >= 0 ? LOW : HIGH);
   
-  	digitalWrite(GREEN_LED, pwmDuty > 0 ? HIGH : LOW);
+	digitalWrite(GREEN_LED, pwmDuty > 0 ? HIGH : LOW);
 }
 
 void updateDemoState() {
@@ -321,40 +297,104 @@ void updateDemoState() {
 	
 	static long detectionTS = 0;
 	static long stageTS = 0;
+	static bool stageProcessed = false;
 	
 	const char *str1 = nullptr;
 	const char *str2 = nullptr;
 
-	bool timeout = stageLengs[demoStage] == 0 || ((millis() - stageTS) > stageLengs[demoStage]);
-	if (!timeout) return;
-	
-	switch (demoStage) {
-		case DemoInit:
-			//reset staic vars, stop motors, etc.
-			detectedSpeed=-1;
-		
-		break;
-		case DemoIntro1:
-			str1 = "DEMO MODE"
-			str2 = "Willkommen!";
-		break;
-		case DemoIntro2:
-			str1 = "1982 Zug\nkann noch fahren\n";
-		break;
-		case DemoEnd:
-			demoMode = false;
+////DemoInit = 0,
+	//DemoIntro1,	DemoIntro2,	DemoIntro3, DemoDetectSpeed,DemoSlowdown,
+	//DemoSlowdown,DemoStationStop,DemoStationWait
+	// This should be executed only once per stage
+	if (!stageProcessed) {
+		switch (demoStage) {
+			case DemoInit:
+				//reset staic vars, stop motors, etc.
+				detectedSpeed=-1;
+				digitalWrite(GREEN_LED, LOW);
+				digitalWrite(RED_LED, LOW);
+			break;
+			case DemoIntro1:
+				str1 = "DEMO MODE";
+				str2 = "Willkommen!";
+			break;
+			case DemoIntro2:
+					//  0123456789ABCDEF
+				str1 = "Zug aus1982 kann";
+				str2 = "noch gut fahren";
+			break;
+			case DemoIntro3:
+				digitalWrite(GREEN_LED, HIGH);
+				whistleBlast(1000);
+				str1 = "Los!";
+				str2 = " ";
+				pwmDuty = random(50, 80) * 100 / 255;
+				setMotorSpeed(pwmDuty);
+			break;
+			case DemoDetectSpeed:
+				//can take a while, maybe introduce timeout error
+				while ((detectionTS = pollTrainSensor(true)) == 0) {};
+				lcd.clear();
+				lcd.write("x160:"); lcd.print(detectedSpeed*36*16/1000); lcd.print("km/h");
+				lcd.setCursor(0, 1);
+				lcd.write("Gsw:"); lcd.print(detectedSpeed); lcd.print("mm/s");
+			break;
+			case DemoSlowdown:
+			{
+				//At this point we know the speed and remaining distance to the station
+				//STA_DIST - TRAIN_LEN;
+				//But we want to start slowing down 240mm before destination
+				int dist = TRACK_LEN + STA_DIST - TRAIN_LEN - 240;
+				delay(dist * 1000 / detectedSpeed);
+				lcd.clear();
+				lcd.write("Ankunft...");
+				//Here tune-up is required because speed varies
+				//pwmDuty -> MOTOR_CUTOFF, assume linear speed dependency
+				// 240mm till stop point
+				int decelerate = (long)detectedSpeed * detectedSpeed / 2 / 240; //mm/s^2
+				int timeToStop = detectedSpeed / decelerate;
+				int speedToPWM = 100*detectedSpeed / (pwmDuty - MOTOR_CUTOFF);
+				int spd = detectedSpeed;
+				for (int i=0; i<timeToStop; i++) {
+					spd-= decelerate;
+					setMotorSpeed(spd * speedToPWM / 100);
+					lcd.setCursor(0, 1);
+					lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
+					delay(1000);
+				}
+				setMotorSpeed(0);
+			}
+			break;
+			case DemoStationStop:
+					//  0123456789ABCDEF
+				str1 = "Zug endet hier";
+				str2 = "bitte aussteigen";
+			break;
+			case DemoStationWait:
+					//  0123456789ABCDEF
+				str1 = "Abfart jetzt";
+				str2 = "bitte einteigen";
+			break;
+			case DemoEnd:
+				demoMode = false;
+			break;	
+		}
+
+		if (str1) {
+			lcd.clear();
+			lcd.write(str1);
+			lcd.setCursor(0, 1);
+			lcd.write(str2);
+		}
+		stageProcessed = true;
 	}
 
-	if (str) {
-		lcd.clear();
-		lcd.write(str);
-	}
-
-	timeout = stageLengs[demoStage] == 0 || ((millis() - stageTS) > stageLengs[demoStage]);
-
-	if (timeout) {
+	//Timeout?
+	if (stageLengs[demoStage] == 0 || ((millis() - stageTS) > stageLengs[demoStage])) {
 		demoStage++; //TODO handle overflow
+		if (demoStage > DemoStationWait) demoStage = DemoIntro3;
 		stageTS = millis();
+		stageProcessed = false;
 	}
   
 }
