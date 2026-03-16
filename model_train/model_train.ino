@@ -11,12 +11,13 @@
 //Geometry (int is 16 bit!)
 //Curved track: outer length 155, inner length 150
 const int TRAIN_LEN=112; //locomotive, mm
+const int TRAIN_CLEN=TRAIN_LEN * 152 / 145; //Observable length in the curve, where sensor located
 const int TRACK_LEN=152*8+2*240; //1760mm outer loop length
-const int STA_DIST=152*3+240; //From sensor to station, mm
+const int STA_DIST=120+152*2+240; //From sensor to station, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-const int MOTOR_CUTOFF=28 * 255 / 100; //%, doesn't move at lower PWM duty
+const int MOTOR_CUTOFF=21; //%, doesn't move at lower PWM duty
 
 // Pin definitions
 // Note: A6 A7 have no pull-up
@@ -164,7 +165,7 @@ long pollTrainSensor(bool detect_speed) {
 		while (millis() < start_ts + 10000) {//locomotive can't pass longer than 10s?
 			delay(10); //poll at ~100hz, sensor isn't too fast
 			if (_expectLevel(LOW)) { //BEAM restored
-				detectedSpeed = constrain((long)TRAIN_LEN * 1000 / (millis() - start_ts), 1, 999);
+				detectedSpeed = constrain((long)TRAIN_CLEN * 1000 / (millis() - start_ts), 1, 999);
 				return start_ts;
 			}
 		}
@@ -192,11 +193,12 @@ void pollButtons() {
 	// Control button 2 with debouncing
 	if (digitalRead(BUTTON_CONTROL_2) == LOW && (millis() - lastControl2Press) > 200) {
 		//two buttons simultaneously
+		lastControl2Press = millis();
 		if (lastControl2Press - lastControl1Press < 200) {
 			demoMode = true;
 			return;
 		}
-		lastControl2Press = millis();
+
 		whistleBlast(1500); //During the whistle sensor is inactive
 	}
 	
@@ -303,17 +305,11 @@ void updateDemoState() {
 	const char *str1 = nullptr;
 	const char *str2 = nullptr;
 
-////DemoInit = 0,
-	//DemoIntro1,	DemoIntro2,	DemoIntro3, DemoDetectSpeed,DemoSlowdown,
-	//DemoSlowdown,DemoStationStop,DemoStationWait
-	// This should be executed only once per stage
 	if (!stageProcessed) {
 		switch (demoStage) {
 			case DemoInit:
 				//reset staic vars, stop motors, etc.
 				detectedSpeed=-1;
-				digitalWrite(GREEN_LED, LOW);
-				digitalWrite(RED_LED, LOW);
 			break;
 			case DemoIntro1:
 				str1 = "DEMO MODE";
@@ -326,11 +322,17 @@ void updateDemoState() {
 			break;
 			case DemoIntro3:
 				digitalWrite(GREEN_LED, HIGH);
+				digitalWrite(RED_LED, LOW);
 				whistleBlast(1000);
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(40, 60) * 255 / 100;
-				setMotorSpeed(pwmDuty);
+				pwmDuty = random(30, 75);
+				// Simplified few-step acceleration
+				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=8) {
+					setMotorSpeed(duty * 255 / 100);
+					delay(500);
+				}
+				setMotorSpeed(pwmDuty * 255 / 100);
 			break;
 			case DemoDetectSpeed:
 				//can take a while, maybe introduce timeout error
@@ -345,25 +347,45 @@ void updateDemoState() {
 				//At this point we know the speed and remaining distance to the station
 				//STA_DIST - TRAIN_LEN;
 				//But we want to start slowing down 800mm before destination
-				long dist = TRACK_LEN + STA_DIST - 800;
+				long dist = STA_DIST - 300;
+				int brakingDist = 320;
+				if (pwmDuty > 50) { 
+					dist+=TRACK_LEN; //add full circle
+					brakingDist = 420;
+				}
 				delay(dist * 1000 / detectedSpeed - (millis()-detectionTS));
+				digitalWrite(GREEN_LED, LOW);
+				digitalWrite(RED_LED, HIGH);
 				lcd.clear();
-				lcd.write("Ankunft:");
+				lcd.write("Ankunft..");
 				//Here tune-up is required because speed varies
 				//pwmDuty -> MOTOR_CUTOFF, assume linear speed dependency
 				// 240mm till stop point
-				long decelerate = (long)detectedSpeed / 800 * detectedSpeed / 2; //mm/s^2
-                int timeToStop = 10*detectedSpeed / decelerate;
-                lcd.write(timeToStop); lcd.write(" sec");
-                lcd.setCursor(0,1); lcd.write("Brems:"); lcd.write((int)decelerate);
-                delay(1000);
+				long decelerate = (long)detectedSpeed * detectedSpeed / brakingDist / 2; //a=-v^2 / 2d, mm/s^2
+                int timeToStop = 10*detectedSpeed / decelerate; //deci-seconds till speed reaches zero
+
+				// Serial.print("INIT PWM:");Serial.println(pwmDuty);
+				// Serial.print("INIT SPD:");Serial.println(detectedSpeed);
+				// Serial.print("Decelerate:");Serial.println(decelerate);
+				// Serial.print("TTS:"); Serial.println(timeToStop);
 				
-				long speedToPWM = 100*detectedSpeed / (pwmDuty - MOTOR_CUTOFF);
-				int spd = detectedSpeed;
-				for (int i=0; i<timeToStop * 10; i++) {
-					//spd-= decelerate / 10; //TODOO deal with error accumulate
-                    spd = (detectedSpeed * 10 - i * decelerate) / 10;
-					setMotorSpeed(MOTOR_CUTOFF + spd * speedToPWM / 100);
+				//Linear Speed to PWM interpolation, but sharper drop for pwm>55 (shiity. need to calculate instrad)
+				int cuttOff = pwmDuty > 50 ? 5 : MOTOR_CUTOFF;
+				long speedToPWM = 100*detectedSpeed / (pwmDuty - cuttOff);
+				Serial.print("PWM CONST: "); Serial.println(speedToPWM);
+
+				//Ensure values at limits, aka unit test
+				// Serial.print("CURR SPEED PWM:"); Serial.println(cuttOff + (long)detectedSpeed * 100 / speedToPWM );
+				// Serial.print("HALF SPEED PWM:"); Serial.println(cuttOff + (long)detectedSpeed / 2 * 100 / speedToPWM );
+				// Serial.print("ZERO SPEED PWM:"); Serial.println(cuttOff + 0 * speedToPWM / 100);
+
+				for (int i=0; i<timeToStop; i++) {
+          			int spd = (detectedSpeed * 10 - i * decelerate) / 10;
+					//Serial.print("Proj speed: "); Serial.println(spd);
+					//setMotorSpeed(MOTOR_CUTOFF + spd * speedToPWM / 100);
+					int pwm = cuttOff + (long)spd * 100 / speedToPWM;  // inside 0-100 range!
+					//Serial.print("PWM: "); Serial.println(pwm);
+					setMotorSpeed(pwm * 255 / 100);
 					//lcd.setCursor(0, 1);
 					//lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
 					delay(100);
@@ -379,7 +401,7 @@ void updateDemoState() {
 			case DemoStationWait:
 					//  0123456789ABCDEF
 				str1 = "Abfart jetzt";
-				str2 = "bitte einteigen";
+				str2 = "bitte eisnteigen";
 			break;
 			case DemoEnd:
 				demoMode = false;
