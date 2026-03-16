@@ -8,14 +8,15 @@
 
 #include <LiquidCrystal.h>
 
-//Geometry
+//Geometry (int is 16 bit!)
+//Curved track: outer length 155, inner length 150
 const int TRAIN_LEN=112; //locomotive, mm
-const int TRACK_LEN=160*8+2*240; //1760mm outer loop length
-const int STA_DIST=160*3+240; //From sensor to station, mm
+const int TRACK_LEN=152*8+2*240; //1760mm outer loop length
+const int STA_DIST=152*3+240; //From sensor to station, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-const int MOTOR_CUTOFF=28 * 100 / 255; //%, doesn't move at lower PWM duty
+const int MOTOR_CUTOFF=28 * 255 / 100; //%, doesn't move at lower PWM duty
 
 // Pin definitions
 // Note: A6 A7 have no pull-up
@@ -191,7 +192,7 @@ void pollButtons() {
 	// Control button 2 with debouncing
 	if (digitalRead(BUTTON_CONTROL_2) == LOW && (millis() - lastControl2Press) > 200) {
 		//two buttons simultaneously
-		if (lastControl1Press - lastControl2Press < 200) {
+		if (lastControl2Press - lastControl1Press < 200) {
 			demoMode = true;
 			return;
 		}
@@ -328,7 +329,7 @@ void updateDemoState() {
 				whistleBlast(1000);
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(50, 80) * 100 / 255;
+				pwmDuty = random(40, 60) * 255 / 100;
 				setMotorSpeed(pwmDuty);
 			break;
 			case DemoDetectSpeed:
@@ -343,24 +344,29 @@ void updateDemoState() {
 			{
 				//At this point we know the speed and remaining distance to the station
 				//STA_DIST - TRAIN_LEN;
-				//But we want to start slowing down 240mm before destination
-				int dist = TRACK_LEN + STA_DIST - TRAIN_LEN - 240;
-				delay(dist * 1000 / detectedSpeed);
+				//But we want to start slowing down 800mm before destination
+				long dist = TRACK_LEN + STA_DIST - 800;
+				delay(dist * 1000 / detectedSpeed - (millis()-detectionTS));
 				lcd.clear();
-				lcd.write("Ankunft...");
+				lcd.write("Ankunft:");
 				//Here tune-up is required because speed varies
 				//pwmDuty -> MOTOR_CUTOFF, assume linear speed dependency
 				// 240mm till stop point
-				int decelerate = (long)detectedSpeed * detectedSpeed / 2 / 240; //mm/s^2
-				int timeToStop = detectedSpeed / decelerate;
-				int speedToPWM = 100*detectedSpeed / (pwmDuty - MOTOR_CUTOFF);
+				long decelerate = (long)detectedSpeed / 800 * detectedSpeed / 2; //mm/s^2
+                int timeToStop = 10*detectedSpeed / decelerate;
+                lcd.write(timeToStop); lcd.write(" sec");
+                lcd.setCursor(0,1); lcd.write("Brems:"); lcd.write((int)decelerate);
+                delay(1000);
+				
+				long speedToPWM = 100*detectedSpeed / (pwmDuty - MOTOR_CUTOFF);
 				int spd = detectedSpeed;
-				for (int i=0; i<timeToStop; i++) {
-					spd-= decelerate;
-					setMotorSpeed(spd * speedToPWM / 100);
-					lcd.setCursor(0, 1);
-					lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
-					delay(1000);
+				for (int i=0; i<timeToStop * 10; i++) {
+					//spd-= decelerate / 10; //TODOO deal with error accumulate
+                    spd = (detectedSpeed * 10 - i * decelerate) / 10;
+					setMotorSpeed(MOTOR_CUTOFF + spd * speedToPWM / 100);
+					//lcd.setCursor(0, 1);
+					//lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
+					delay(100);
 				}
 				setMotorSpeed(0);
 			}
