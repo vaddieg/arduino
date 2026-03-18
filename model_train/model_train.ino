@@ -401,7 +401,7 @@ void updateDemoState() {
 			case DemoStationWait:
 					//  0123456789ABCDEF
 				str1 = "Abfart jetzt";
-				str2 = "bitte eisnteigen";
+				str2 = "bitte einsteigen";
 			break;
 			case DemoEnd:
 				demoMode = false;
