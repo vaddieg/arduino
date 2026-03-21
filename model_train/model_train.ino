@@ -400,7 +400,7 @@ void updateDemoState() {
 			break;
 			case DemoStationWait:
 					//  0123456789ABCDEF
-				str1 = "Abfart jetzt";
+				str1 = "Abfahrt jetzt";
 				str2 = "bitte einsteigen";
 			break;
 			case DemoEnd:
