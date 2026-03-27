@@ -19,10 +19,14 @@ const int WORLD_SCALE=160; // N-scale 1:160
 //Fine-tunes
 const int MOTOR_CUTOFF=21; //%, doesn't move at lower PWM duty
 
+// //////////////////////////////
 // Pin definitions
 // Note: A6 A7 have no pull-up
+/////////////////////////////////
 const int MOTOR_PWM_PIN = 5; //D3 and D11 are affected by tone()
-const int MOTOR_RELAY_PIN = 4; //Not installed yet
+const int MOTOR_RELAY_PIN = 4;
+//const int SWITCH_LEFT_PIN =?
+//const int SWITCH_RIGHT_PIN =?
 const int SPEAKER_PIN = 3;
 const int RED_LED = A3; 
 const int GREEN_LED = A2;
@@ -45,17 +49,20 @@ const int LCD_D5 = 10;
 const int LCD_D6 = 11;
 const int LCD_D7 = 12;
 
+//
+// Run params
+//
 const int LCD_REFRESH = 1000 / 5; // 5Hz
-// Motor control
-const int MIN_PWM = 0;
+// Motor operation range
+const int MIN_PWM = -255; //Set to 0 if no relay installed
 const int MAX_PWM = 255;
 
 // Global vars
-int pwmDuty = 0;
-long detectedSpeed = -1;
+long detectedSpeed = 0;
 unsigned long lastDetectionTS = 0;
 unsigned loops = 0; 
-bool motorForward = true;
+
+int pwmDuty = 0; //negative value is for motor reverse
 
 bool demoMode = false;
 int demoStage = 0;
@@ -79,10 +86,15 @@ const int stageLengs[] = {0, 2000, 2000, 2000, 0, 0, 10000, 5000, 0};
 LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 void setup() {
-	pinMode(MOTOR_RELAY_PIN, OUTPUT);
-	pinMode(MOTOR_PWM_PIN, OUTPUT);
-	digitalWrite(MOTOR_RELAY_PIN, LOW); // Default forward
 	
+	//Motor
+	pinMode(MOTOR_PWM_PIN, OUTPUT);
+	pinMode(MOTOR_RELAY_PIN, OUTPUT);
+	//Motor and relay OFF
+	analogWrite(MOTOR_PWM_PIN, 0);
+	delay(10);
+	digitalWrite(MOTOR_RELAY_PIN, LOW);
+
 	pinMode(SPEAKER_PIN, OUTPUT);
 	
 	pinMode(BUTTON_CONTROL_1, INPUT_PULLUP);
@@ -179,15 +191,12 @@ void pollButtons() {
 	
 	// Control button 1 with debouncing
 	if (digitalRead(BUTTON_CONTROL_1) == LOW && (millis() - lastControl1Press) > 200) {
-		// Toggle direction
-		motorForward = !motorForward;
-		setMotorDirection(motorForward);
 		lastControl1Press = millis();
 		detectedSpeed = -1;
 		//kickstart engine
-		setMotorSpeed(255);
+		setMotorPower(255);
 		delay(10);
-		setMotorSpeed(pwmDuty);
+		setMotorPower(abs(pwmDuty));
 	}
 	
 	// Control button 2 with debouncing
@@ -218,17 +227,19 @@ void updateMotor() {
 	static long lastRefresh = 0;
 	long ts = millis();
 	if (ts - lastRefresh > 100) {
-		setMotorSpeed(pwmDuty);
+		setMotorPower(abs(pwmDuty));
+		setMotorReverse(pwmDuty < 0);
 		lastRefresh = ts;
 	}
 }
 
-void setMotorSpeed(int speed) {
-	analogWrite(MOTOR_PWM_PIN, speed);
+void setMotorPower(int pwr) {
+	analogWrite(MOTOR_PWM_PIN, pwr);
 }
 
-void setMotorDirection(bool forward) {
-	digitalWrite(MOTOR_RELAY_PIN, forward ? LOW : HIGH);
+void setMotorReverse(bool rev) {
+	//Rule here is to avoid touching relay when train is moving
+	digitalWrite(MOTOR_RELAY_PIN, rev ? HIGH : LOW);
 }
 
 void updateDisplay() {
@@ -245,8 +256,8 @@ void updateDisplay() {
 		if (detectedSpeed >= 0) {
 			lcd.print(detectedSpeed);
 			lcd.print("mm/s");
-            lcd.print(" ");
-            lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
+			lcd.print(" ");
+			lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
 		} else {
 			lcd.print("messen...    ");
 		}
@@ -270,20 +281,20 @@ void whistleBlast(int totalDuration) {
 		
 		// Attack Phase (first 10%)
 		if (progr < 10) {
-		  int freq = 2500 + progr * 30;   // rise from 2.5kHz to ~3.4kHz
-		  tone(SPEAKER_PIN, freq);
-		  delay(15 + (20 * (10 - progr))); // more interruptions early
-		  noTone(SPEAKER_PIN);
-		  delay(10);
+			int freq = 2500 + progr * 30;   // rise from 2.5kHz to ~3.4kHz
+			tone(SPEAKER_PIN, freq);
+			delay(15 + (20 * (10 - progr))); // more interruptions early
+			noTone(SPEAKER_PIN);
+			delay(10);
 		}
 		
 		// Chaos Phase
 		else {
-		  int freq = random(2600, 3000);
-		  tone(SPEAKER_PIN, freq);
-		  delay(random(12, 12));
-		  noTone(SPEAKER_PIN);
-		  delay(random(3, 6));
+			int freq = random(2600, 3000);
+			tone(SPEAKER_PIN, freq);
+			delay(random(12, 12));
+			noTone(SPEAKER_PIN);
+			delay(random(3, 6));
 		}
 	}
 }
@@ -310,6 +321,10 @@ void updateDemoState() {
 			case DemoInit:
 				//reset staic vars, stop motors, etc.
 				detectedSpeed=-1;
+				pwmDuty = 0;
+				setMotorPower(0);
+				delay(200);
+				setMotorReverse(false);
 			break;
 			case DemoIntro1:
 				str1 = "DEMO MODE";
@@ -329,10 +344,10 @@ void updateDemoState() {
 				pwmDuty = random(30, 75);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=8) {
-					setMotorSpeed(duty * 255 / 100);
+					setMotorPower(duty * 255 / 100);
 					delay(500);
 				}
-				setMotorSpeed(pwmDuty * 255 / 100);
+				setMotorPower(pwmDuty * 255 / 100);
 			break;
 			case DemoDetectSpeed:
 				//can take a while, maybe introduce timeout error
@@ -380,17 +395,17 @@ void updateDemoState() {
 				// Serial.print("ZERO SPEED PWM:"); Serial.println(cuttOff + 0 * speedToPWM / 100);
 
 				for (int i=0; i<timeToStop; i++) {
-          			int spd = (detectedSpeed * 10 - i * decelerate) / 10;
+					int spd = (detectedSpeed * 10 - i * decelerate) / 10;
 					//Serial.print("Proj speed: "); Serial.println(spd);
-					//setMotorSpeed(MOTOR_CUTOFF + spd * speedToPWM / 100);
+					//setMotorPower(MOTOR_CUTOFF + spd * speedToPWM / 100);
 					int pwm = cuttOff + (long)spd * 100 / speedToPWM;  // inside 0-100 range!
 					//Serial.print("PWM: "); Serial.println(pwm);
-					setMotorSpeed(pwm * 255 / 100);
+					setMotorPower(pwm * 255 / 100);
 					//lcd.setCursor(0, 1);
 					//lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
 					delay(100);
 				}
-				setMotorSpeed(0);
+				setMotorPower(0);
 			}
 			break;
 			case DemoStationStop:
