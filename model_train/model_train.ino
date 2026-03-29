@@ -3,7 +3,13 @@
  * Arduino Nano Project
  * 
  * Made for Eisenbahnfreunde (efbbev.de)
- *
+ * DR Baureihe 118
+ * Reference train https://de.wikipedia.org/wiki/DR-Baureihe_V_180
+ * Speed: up to 120 km/h
+ * Length: 19.5m				:160 12.2cm
+ * Power: 1380 kW
+ * Service weight: 95t 			:160 23g
+ * Traction: 270 kN
  */
 
 #include <LiquidCrystal.h>
@@ -17,7 +23,8 @@ const int STA_DIST=120+152*2+240; //From sensor to station, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-const int MOTOR_CUTOFF=21; //%, doesn't move at lower PWM duty
+const int MOTOR_CUTOFF=25; //%, doesn't move at lower PWM duty
+const int MOTOR_MAX_REAL=55; //%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
 
 // //////////////////////////////
 // Pin definitions
@@ -28,8 +35,8 @@ const int MOTOR_RELAY_PIN = 4;
 //const int SWITCH_LEFT_PIN =?
 //const int SWITCH_RIGHT_PIN =?
 const int SPEAKER_PIN = 3;
-const int RED_LED = A3; 
-const int GREEN_LED = A2;
+const int RED_LED = A2;
+const int GREEN_LED = A3;
 
 const int BUTTON_CONTROL_1 = A4;//toggle direction, trigger speed measure
 const int BUTTON_CONTROL_2 = A5;//play whistle
@@ -141,7 +148,7 @@ void loop() {
 		return;
 	}
 	pollButtons();
-	if (pollTrainSensor(detectedSpeed == -1)) {
+	if (pwmDuty && pollTrainSensor(detectedSpeed == -1)) {
 		playTone(400, 5);
 	}
 	updateMotor();
@@ -341,7 +348,7 @@ void updateDemoState() {
 				whistleBlast(1000);
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(30, 75);
+				pwmDuty = random(30, MOTOR_MAX_REAL);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=8) {
 					setMotorPower(duty * 255 / 100);
