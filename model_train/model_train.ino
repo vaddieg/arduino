@@ -40,8 +40,9 @@ const int GREEN_LED = A3;
 
 const int BUTTON_CONTROL_1 = A4;//toggle direction, trigger speed measure
 const int BUTTON_CONTROL_2 = A5;//play whistle
-const int BUTTON_SPEED_UP = A0;
-const int BUTTON_SPEED_DOWN = A1;
+const int SPEED_HANDLE = A6;
+//const int BUTTON_SPEED_UP = A0;
+//const int BUTTON_SPEED_DOWN = A1;
 
 //IR beam 36KHz on Timer1, works only for D9 pin
 const int IR_BEAM = 9;
@@ -106,8 +107,9 @@ void setup() {
 	
 	pinMode(BUTTON_CONTROL_1, INPUT_PULLUP);
 	pinMode(BUTTON_CONTROL_2, INPUT_PULLUP);
-	pinMode(BUTTON_SPEED_UP, INPUT_PULLUP);
-	pinMode(BUTTON_SPEED_DOWN, INPUT_PULLUP);
+	pinMode(SPEED_HANDLE, INPUT);
+	//pinMode(BUTTON_SPEED_UP, INPUT_PULLUP);
+	//pinMode(BUTTON_SPEED_DOWN, INPUT_PULLUP);
 	
 	//IR sensing
 	pinMode(IR_SENSOR, INPUT);
@@ -219,11 +221,13 @@ void pollButtons() {
 	}
 	
 	// Speed buttons with autorepeat
-	if (digitalRead(BUTTON_SPEED_UP) == LOW) {
+	int handle = analogRead(SPEED_HANDLE);
+	
+	if (handle > 700) {
 		pwmDuty = min(pwmDuty + 1, MAX_PWM);
 	}
 	
-	if (digitalRead(BUTTON_SPEED_DOWN) == LOW) {
+	if (handle < 300) {
 		pwmDuty = max(pwmDuty - 1, MIN_PWM);
 	}
 	
@@ -348,7 +352,7 @@ void updateDemoState() {
 				whistleBlast(1000);
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(30, MOTOR_MAX_REAL);
+				pwmDuty = random(28, MOTOR_MAX_REAL);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=8) {
 					setMotorPower(duty * 255 / 100);
@@ -371,7 +375,7 @@ void updateDemoState() {
 				//But we want to start slowing down 800mm before destination
 				long dist = STA_DIST - 300;
 				int brakingDist = 320;
-				if (pwmDuty > 50) { 
+				if (pwmDuty > 45) { 
 					dist+=TRACK_LEN; //add full circle
 					brakingDist = 420;
 				}
@@ -381,7 +385,7 @@ void updateDemoState() {
 				lcd.clear();
 				lcd.write("Ankunft..");
 				//Here tune-up is required because speed varies
-				//pwmDuty -> MOTOR_CUTOFF, assume linear speed dependency
+				//pwmDuty -> MOTOR_C9UTOFF, assume linear speed dependency
 				// 240mm till stop point
 				long decelerate = (long)detectedSpeed * detectedSpeed / brakingDist / 2; //a=-v^2 / 2d, mm/s^2
                 int timeToStop = 10*detectedSpeed / decelerate; //deci-seconds till speed reaches zero
