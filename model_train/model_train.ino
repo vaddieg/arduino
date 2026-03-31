@@ -23,8 +23,8 @@ const int STA_DIST=120+152*2+240; //From sensor to station, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-const int MOTOR_CUTOFF=25; //%, doesn't move at lower PWM duty
-const int MOTOR_MAX_REAL=55; //%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
+const int MOTOR_CUTOFF=24 * 255 / 100; //%, train doesn't move at lower PWM duty
+const int MOTOR_MAX_REAL=55 * 255 / 100; //55%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
 
 // //////////////////////////////
 // Pin definitions
@@ -49,7 +49,7 @@ const int IR_BEAM = 9;
 const int IR_SENSOR = 2;
 
 // LCD pins (4-bit mode)
-// We try to use right-side pins to drive LCD, avoiding wire intersections
+// We try to use right-side pins to drive LCD, avoiding PCB wire intersections
 const int LCD_RS = 6;
 const int LCD_EN = 7;
 const int LCD_D4 = 8;
@@ -70,7 +70,7 @@ long detectedSpeed = 0;
 unsigned long lastDetectionTS = 0;
 unsigned loops = 0; 
 
-int pwmDuty = 0; //negative value is for motor reverse
+int pwmDuty = 0; //(MIN_PWM..MAX_PWM) negative value is for motor reverse
 
 bool demoMode = false;
 int demoStage = 0;
@@ -205,7 +205,7 @@ void pollButtons() {
 		//kickstart engine
 		setMotorPower(255);
 		delay(10);
-		setMotorPower(abs(pwmDuty));
+		setMotorPower(pwmDuty);
 	}
 	
 	// Control button 2 with debouncing
@@ -222,13 +222,14 @@ void pollButtons() {
 	
 	// Speed buttons with autorepeat
 	int handle = analogRead(SPEED_HANDLE);
+	int step = abs(pwmDuty) < MOTOR_CUTOFF ? 3 : 1;
 	
 	if (handle > 700) {
-		pwmDuty = min(pwmDuty + 1, MAX_PWM);
+		pwmDuty = min(pwmDuty + step, MAX_PWM);
 	}
 	
 	if (handle < 300) {
-		pwmDuty = max(pwmDuty - 1, MIN_PWM);
+		pwmDuty = max(pwmDuty - step, MIN_PWM);
 	}
 	
 }
@@ -238,14 +239,15 @@ void updateMotor() {
 	static long lastRefresh = 0;
 	long ts = millis();
 	if (ts - lastRefresh > 100) {
-		setMotorPower(abs(pwmDuty));
+		setMotorPower(pwmDuty);
 		setMotorReverse(pwmDuty < 0);
 		lastRefresh = ts;
 	}
 }
 
 void setMotorPower(int pwr) {
-	analogWrite(MOTOR_PWM_PIN, pwr);
+	int val = abs(pwr) < MOTOR_CUTOFF - 5 ? 0 : abs(pwr);
+	analogWrite(MOTOR_PWM_PIN, abs(pwr));
 }
 
 void setMotorReverse(bool rev) {
@@ -352,13 +354,13 @@ void updateDemoState() {
 				whistleBlast(1000);
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(28, MOTOR_MAX_REAL);
+				pwmDuty = random(MOTOR_CUTOFF + 5, MOTOR_MAX_REAL);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=8) {
-					setMotorPower(duty * 255 / 100);
-					delay(500);
+					setMotorPower(duty);
+					delay(300);
 				}
-				setMotorPower(pwmDuty * 255 / 100);
+				setMotorPower(pwmDuty);
 			break;
 			case DemoDetectSpeed:
 				//can take a while, maybe introduce timeout error
@@ -375,7 +377,7 @@ void updateDemoState() {
 				//But we want to start slowing down 800mm before destination
 				long dist = STA_DIST - 300;
 				int brakingDist = 320;
-				if (pwmDuty > 45) { 
+				if (pwmDuty > 45 * 255 / 100) { 
 					dist+=TRACK_LEN; //add full circle
 					brakingDist = 420;
 				}
@@ -396,7 +398,7 @@ void updateDemoState() {
 				// Serial.print("TTS:"); Serial.println(timeToStop);
 				
 				//Linear Speed to PWM interpolation, but sharper drop for pwm>55 (shiity. need to calculate instrad)
-				int cuttOff = pwmDuty > 50 ? 5 : MOTOR_CUTOFF;
+				int cuttOff = pwmDuty > 50 * 255 / 100 ? 5 : MOTOR_CUTOFF;
 				long speedToPWM = 100*detectedSpeed / (pwmDuty - cuttOff);
 				Serial.print("PWM CONST: "); Serial.println(speedToPWM);
 
@@ -411,7 +413,7 @@ void updateDemoState() {
 					//setMotorPower(MOTOR_CUTOFF + spd * speedToPWM / 100);
 					int pwm = cuttOff + (long)spd * 100 / speedToPWM;  // inside 0-100 range!
 					//Serial.print("PWM: "); Serial.println(pwm);
-					setMotorPower(pwm * 255 / 100);
+					setMotorPower(pwm);
 					//lcd.setCursor(0, 1);
 					//lcd.write("Gsw:"); lcd.print(spd); lcd.print("mm/s");
 					delay(100);
