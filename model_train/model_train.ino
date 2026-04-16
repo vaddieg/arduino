@@ -49,12 +49,21 @@ const int IR_SENSOR = 2;
 
 // LCD pins (4-bit mode)
 // We try to use right-side pins to drive LCD, avoiding PCB wire intersections
+#ifdef SHIELD
+const int LCD_RS = 12;
+const int LCD_EN = 11;
+const int LCD_D4 = 10;
+const int LCD_D5 = 8;
+const int LCD_D6 = 7;
+const int LCD_D7 = 6;
+#else
 const int LCD_RS = 6;
 const int LCD_EN = 7;
 const int LCD_D4 = 8;
 const int LCD_D5 = 10;
 const int LCD_D6 = 11;
 const int LCD_D7 = 12;
+#endif
 
 //
 // Run params
