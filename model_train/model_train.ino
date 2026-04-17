@@ -506,7 +506,7 @@ void updateDemoState() {
 				digitalWrite(RED_LED, HIGH);
 				lcd.clear();
 				lcd.write("Ankunft..");
-				lcd.lcd.setCursor(0, 1);
+				lcd.setCursor(0, 1);
 				lcd.write("Gleis ");
 				lcd.write(platform2 ? "2" : "1");
 				
