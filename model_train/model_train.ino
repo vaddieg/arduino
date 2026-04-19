@@ -15,7 +15,7 @@
 #include <LiquidCrystal.h>
 
 // Use a potentiometer as input instead of step +/- buttons
-#define ANALOG_THROTTLE 0
+#define ANALOG_THROTTLE 1
 // There's Arduino HAT format PCB with different PIN connections
 #define ARDUINO_HAT 0
 
@@ -24,9 +24,9 @@
 constexpr int TRAIN_LEN=112; //locomotive, mm
 constexpr int TRAIN_CLEN=TRAIN_LEN * 152 / 145; //Observable length in the curve, where sensor located
 constexpr int TRACK_LEN=152*8+2*240+2*110+2*50; //1980mm outer loop length
-const int STA_DIST=1450; //From sensor to Station platform 1, mm
-const int STA2_DIST = 1330;//From sensor to Station platform 2, mm
-const int WORLD_SCALE=160; // N-scale 1:160
+constexpr int STA_DIST=1450; //From sensor to Station platform 1, mm
+constexpr int STA2_DIST = 1330;//From sensor to Station platform 2, mm
+constexpr int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
 constexpr int MOTOR_CUTOFF=23 * 255 / 100; //%, train doesn't move at lower PWM duty
@@ -151,9 +151,8 @@ void setup() {
 	lcd.setCursor(0, 1);
 	lcd.print("von Roman & Vad");
 	delay(2000);
-    lcd.clear();
 	
-	Serial.begin(9600);
+	//Serial.begin(9600);
 	
 	// Configure Timer1 for 36 kHz
 	// I don't give a fuck about arduino registers
@@ -181,6 +180,7 @@ void setup() {
 		delay(1000);
 	}
 
+	lcd.clear();
 }
 
 
@@ -189,7 +189,7 @@ void demoLoop() {
 }
 
 void setupLoop() {
-
+	//TODO let user enter params and save to EEPROM
 }
 
 void operationLoop() {
@@ -289,10 +289,10 @@ void pollButtons() {
     	targetDuty = 0;
   	}
   	else  if (handle <= center - deadZone) {
-    	targetDuty = max(map(handle, 0, center - deadZone, -254, 0), MIN_PWM);
+    	targetDuty = max(map(handle, 0, center - deadZone, -MOTOR_MAX_REAL, 0), MIN_PWM);
 	}
 	else {
-		targetDuty = min(map(handle, center + deadZone, 1023, 0, 254), MAX_PWM);
+		targetDuty = min(map(handle, center + deadZone, 1023, 0, MOTOR_MAX_REAL), MAX_PWM);
 	}
   	// Soft follow the targetDuty to avoid rapid speed jumps and direction change
   	const int stepInterval = 50;   // ms between updates
