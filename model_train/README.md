@@ -1,6 +1,6 @@
 # Model Train Controller
 
-Arduino Nano project for controlling analog model trains.
+Arduino Nano project for controlling analog model trains. Demo mode is tuned for my specific track setup, but manual mode is useful with any custom configuration.
 
 ## Features
 - Precise manual train control using PWM power supply via rails
@@ -28,6 +28,7 @@ Arduino Nano project for controlling analog model trains.
 - 1x 470uF 25V
 - 1x 100uF 16V
 - 3x 1N4001 diodes
+- 1x 10k potentiometer
 - header pins
 - 9-15V DC power supply
 - wires
