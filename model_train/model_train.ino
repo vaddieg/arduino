@@ -14,12 +14,17 @@
 
 #include <LiquidCrystal.h>
 
-//Geometry (int is 16 bit!)
+// Use a potentiometer as input instead of step +/- buttons
+#define ANALOG_THROTTLE 0
+// There's Arduino HAT format PCB with different PIN connections
+#define ARDUINO_HAT 0
+
+//Track Geometry
 //Curved track: outer length 155, inner length 150
 constexpr int TRAIN_LEN=112; //locomotive, mm
 constexpr int TRAIN_CLEN=TRAIN_LEN * 152 / 145; //Observable length in the curve, where sensor located
-constexpr int TRACK_LEN=152*8+2*240+2*110; //1980mm outer loop length
-const int STA_DIST=1400; //From sensor to Station platform 1, mm
+constexpr int TRACK_LEN=152*8+2*240+2*110+2*50; //1980mm outer loop length
+const int STA_DIST=1450; //From sensor to Station platform 1, mm
 const int STA2_DIST = 1330;//From sensor to Station platform 2, mm
 const int WORLD_SCALE=160; // N-scale 1:160
 
@@ -41,7 +46,8 @@ const int GREEN_LED = A3;
 
 const int BUTTON_1 = A4;//trigger speed measure
 const int BUTTON_2 = A5;//play whistle, switch rails
-const int SPEED_HANDLE = A6; //Voltage dividor, maybe linear potentiometer as option with direct speed mapping
+const int SPEED_HANDLE = A6; //Voltage dividor, optionally linear potentiometer as option with direct speed mapping
+const int RAIL_CURRENT = A7; //TODO short circuit
 
 //IR beam 36KHz on Timer1, works only for D9 pin
 const int IR_BEAM = 9;
@@ -49,7 +55,7 @@ const int IR_SENSOR = 2;
 
 // LCD pins (4-bit mode)
 // We try to use right-side pins to drive LCD, avoiding PCB wire intersections
-#ifdef SHIELD
+#if ARDUINO_HAT
 const int LCD_RS = 12;
 const int LCD_EN = 11;
 const int LCD_D4 = 10;
@@ -74,9 +80,13 @@ const int MIN_PWM = -255; //Set to 0 if no relay installed
 const int MAX_PWM = 255;
 
 // Global vars
+bool sensorInstalled = false;
 long detectedSpeed = 0;
 unsigned long lastDetectionTS = 0;
-unsigned loops = 0; 
+
+#if ANALOG_THROTTLE
+unsigned long lastThrottleUpdate = 0;
+#endif
 
 int pwmDuty = 0; //(MIN_PWM..MAX_PWM) negative value is for motor reverse
 
@@ -130,10 +140,6 @@ void setup() {
 		setupMode = true;
 	}
 	
-	//IR sensing
-	pinMode(IR_SENSOR, INPUT);
-	pinMode(IR_BEAM, OUTPUT);
-	
 	// Initialize traffic lights
 	pinMode(RED_LED, OUTPUT);
 	pinMode(GREEN_LED, OUTPUT);
@@ -160,22 +166,55 @@ void setup() {
 	//OCR1A = 210; //38 kHz
 
 	//Motor PWM (Timer2) default is 490 (up to 1kHz is ok)
+	//Maybe change
+	
+	//Check if sensor installed
+	pinMode(IR_SENSOR, INPUT_PULLUP);
+	pinMode(IR_BEAM, OUTPUT);
+	delay(1);
+	sensorInstalled = _expectLevel(LOW);
+	pinMode(IR_SENSOR, INPUT);
+	
+	if (!sensorInstalled) {
+		lcd.clear();
+		lcd.print("Ohne Sensor");
+		delay(1000);
+	}
 
 }
 
-void loop() {
-	if (demoMode) {
-		updateDemoState();
-		return;
-	}
+
+void demoLoop() {
+	updateDemoState();
+}
+
+void setupLoop() {
+
+}
+
+void operationLoop() {
 	pollButtons();
-	if (pwmDuty && pollTrainSensor(detectedSpeed == -1)) {
+	
+	if (sensorInstalled && pwmDuty && pollTrainSensor(detectedSpeed == -1)) {
 		playTone(400, 5);
 	}
 	updateMotor();
 	updateDisplay();
 	updateTrafficLights();
-	delay(50);
+	//TODO: Kurzschluss check
+	delay(20); //update env at 50Hz
+}
+
+void loop() {
+	if (demoMode) {
+		demoLoop();
+	}
+	else if (setupMode) {
+		setupLoop();
+	}
+	else {
+		operationLoop();
+	}
 }
 
 bool _expectLevel(int lvl) {
@@ -192,17 +231,17 @@ bool _expectLevel(int lvl) {
 //can block for 10s if called with detect speed
 //can be called subsequentally with detect_speed=true
 long pollTrainSensor(bool detect_speed) {
-  
+	if (!sensorInstalled) return 0;
+
 	if (_expectLevel(HIGH)) { //BEAM interrupted
 
 		long start_ts = millis();
-		loops++;
 		
 		if (!detect_speed) return start_ts;
 
 		//Filter out unstable beam on train edges
-		delay(100); //no train pass through in 0.1s
-		while (millis() < start_ts + 10000) {//locomotive can't pass longer than 10s?
+		delay(100); //no train can sneak through in 0.1s
+		while (millis() < start_ts + 12000) {//locomotive can't pass longer than 12s?
 			delay(10); //poll at ~100hz, sensor isn't too fast
 			if (_expectLevel(LOW)) { //BEAM restored
 				detectedSpeed = constrain((long)TRAIN_CLEN * 1000 / (millis() - start_ts), 1, 999);
@@ -223,7 +262,7 @@ void pollButtons() {
 		detectedSpeed = -1;
 		//kickstart engine
 		setMotorPower(255);
-		delay(10);
+		delay(5);
 		setMotorPower(pwmDuty);
 	}
 	
@@ -231,7 +270,7 @@ void pollButtons() {
 	if (digitalRead(BUTTON_2) == LOW && (millis() - lastControl2Press) > 200) {
 		//two buttons simultaneously
 		lastControl2Press = millis();
-		if (lastControl2Press - lastControl1Press < 200) {
+		if (sensorInstalled && (lastControl2Press - lastControl1Press < 200)) {
 			demoMode = true;
 			return;
 		}
@@ -239,25 +278,60 @@ void pollButtons() {
 		whistleBlast(1500); //During the whistle sensor is inactive
 	}
 	
-	// Speed buttons with autorepeat
-	int handle = analogRead(SPEED_HANDLE);
-	int step = abs(pwmDuty) < MOTOR_CUTOFF ? 3 : 1; //faster in dead zone
+	int handle = analogRead(SPEED_HANDLE); //0..1023
+	const int deadZone = 50;
+	const int center = 512;
 	
-	if (handle > 700) {
+#if	ANALOG_THROTTLE
+	int targetDuty;
+	//
+	if (handle > center - deadZone && handle < center + deadZone) {
+    	targetDuty = 0;
+  	}
+  	else  if (handle <= center - deadZone) {
+    	targetDuty = max(map(handle, 0, center - deadZone, -254, 0), MIN_PWM);
+	}
+	else {
+		targetDuty = min(map(handle, center + deadZone, 1023, 0, 254), MAX_PWM);
+	}
+  	// Soft follow the targetDuty to avoid rapid speed jumps and direction change
+  	const int stepInterval = 50;   // ms between updates
+	const int maxStep = 5;
+	unsigned long now = millis();
+
+  // Update in small steps every stepInterval
+	if (now - lastThrottleUpdate >= stepInterval) {
+		lastThrottleUpdate = now;
+	
+    	int diff = targetDuty - pwmDuty;
+
+    	// Limit how fast we move toward target
+    	if (diff > maxStep) diff = maxStep;
+    	else if (diff < -maxStep) diff = -maxStep;
+
+    	pwmDuty += diff;
+	}
+  
+  
+#else
+	// Speed buttons with autorepeat
+	int step = abs(pwmDuty) < MOTOR_CUTOFF ? 2 : 1; //faster in motor dead zone
+	
+	if (handle > center + deadZone) {
 		pwmDuty = min(pwmDuty + step, MAX_PWM);
 	}
 	
-	if (handle < 300) {
+	if (handle < center - deadZone) {
 		pwmDuty = max(pwmDuty - step, MIN_PWM);
 	}
-	
+#endif	
 }
 
 void updateMotor() {
-	// Frequent calls can drop PWM duty cycles
-	static long lastRefresh = 0;
+	// Too frequent calls might drop effective PWM duty cycles
+	static unsigned long lastRefresh = 0;
 	long ts = millis();
-	if (ts - lastRefresh > 100) {
+	if (ts - lastRefresh > 50) {
 		setMotorPower(pwmDuty);
 		setMotorReverse(pwmDuty < 0);
 		lastRefresh = ts;
@@ -265,6 +339,7 @@ void updateMotor() {
 }
 
 void setMotorPower(int pwr) {
+	//Enforce 0 around motor dead zone, so relay switches at 0 motor current
 	int val = abs(pwr) < MOTOR_CUTOFF - 5 ? 0 : abs(pwr);
 	analogWrite(MOTOR_PWM_PIN, abs(pwr));
 }
@@ -425,7 +500,7 @@ void updateTrafficLights() {
 
 void updateDemoState() {
 	//Common logic for diving throug stages:
-	//switch-case executed only once per stage and can block
+	//switch-case executed only once per stage and can block, since we don't need to poll user input
 	
 	static long detectionTS = 0;
 	static long stageTS = 0;
@@ -464,7 +539,7 @@ void updateDemoState() {
 				loops++;
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(MOTOR_CUTOFF + 8, MOTOR_MAX_REAL - 30);
+				pwmDuty = random(MOTOR_CUTOFF + 8, MOTOR_MAX_REAL - 20);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=4) {
 					setMotorPower(duty);
@@ -546,7 +621,15 @@ void updateDemoState() {
 				if (platform2)  {
 					setMotorReverse(true);
 					setMotorPower(35*255/100);
-					delay(21000);
+					while (pollTrainSensor(true) == 0) {
+						delay(50);
+					}
+					//At this moment last cart has passed the sensor
+					//TRACK_LEN-STA_DIST to go
+					//Cart is 1.5 shorter, so
+					int speed = detectedSpeed * 3 / 2;
+					delay((TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed);
+					
 					setMotorPower(MOTOR_CUTOFF);
 					delay(500);
 					setMotorPower(0);
