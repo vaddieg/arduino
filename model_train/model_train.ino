@@ -15,7 +15,7 @@
 #include <LiquidCrystal.h>
 
 // Use a potentiometer as input instead of step +/- buttons
-#define ANALOG_THROTTLE 1
+#define ANALOG_THROTTLE 0
 // There's Arduino HAT format PCB with different PIN connections
 #define ARDUINO_HAT 0
 
@@ -78,11 +78,13 @@ const int LCD_REFRESH = 1000 / 5; // 5Hz
 // Motor operation range
 const int MIN_PWM = -255; //Set to 0 if no relay installed
 const int MAX_PWM = 255;
+const int MAX_RAIL_CURRENT = 200; //mA
 
 // Global vars
 bool sensorInstalled = false;
 long detectedSpeed = 0;
 unsigned long lastDetectionTS = 0;
+unsigned railCurrent = 0; //Actually a mapped voltage  on a 0.5 Ohm resistor
 
 #if ANALOG_THROTTLE
 unsigned long lastThrottleUpdate = 0;
@@ -135,6 +137,7 @@ void setup() {
 	pinMode(BUTTON_1, INPUT_PULLUP);
 	pinMode(BUTTON_2, INPUT_PULLUP);
 	pinMode(SPEED_HANDLE, INPUT);
+	pinMode(RAIL_CURRENT, INPUT);
 
 	if (digitalRead(BUTTON_1) == LOW && digitalRead(BUTTON_2) == LOW) {
 		setupMode = true;
@@ -202,7 +205,7 @@ void operationLoop() {
 	updateDisplay();
 	updateTrafficLights();
 	//TODO: Kurzschluss check
-	delay(20); //update env at 50Hz
+	monitorCurrent(20); //update env at 50Hz
 }
 
 void loop() {
@@ -252,21 +255,40 @@ long pollTrainSensor(bool detect_speed) {
 	return 0;
 }
 
+void monitorCurrent(long delayMS) {
+	long start = millis();
+	unsigned maxLocal = 0;
+	while (millis()-start < delayMS) {
+		unsigned maxVal = 0;
+		for (int i=0; i<10; i++) {
+			maxVal = max(maxVal, analogRead(RAIL_CURRENT));
+			delayMicroseconds(99);
+		}
+		maxLocal = max(maxVal, maxLocal);
+		//Emergency stop if exceeds limit
+		//TODO
+	}
+
+	railCurrent = maxLocal;
+}
+
 void pollButtons() {
 	static long lastControl1Press = 0;
 	static long lastControl2Press = 0;
 	
-	// Control button 1 with debouncing
+	// BTN 1
 	if (digitalRead(BUTTON_1) == LOW && (millis() - lastControl1Press) > 200) {
 		lastControl1Press = millis();
-		detectedSpeed = -1;
+		if (sensorInstalled) {
+			detectedSpeed = -1;
+		}
 		//kickstart engine
 		setMotorPower(255);
 		delay(5);
 		setMotorPower(pwmDuty);
 	}
 	
-	// Control button 2 with debouncing
+	// BTN 2
 	if (digitalRead(BUTTON_2) == LOW && (millis() - lastControl2Press) > 200) {
 		//two buttons simultaneously
 		lastControl2Press = millis();
@@ -314,7 +336,7 @@ void pollButtons() {
   
   
 #else
-	// Speed buttons with autorepeat
+	// Speed buttons with autorepeat, since we use voltage divider some tolerance required
 	int step = abs(pwmDuty) < MOTOR_CUTOFF ? 2 : 1; //faster in motor dead zone
 	
 	if (handle > center + deadZone) {
@@ -353,7 +375,7 @@ void toggleSwitch() {
 	switchIsLeft = !switchIsLeft;
 	int pin = switchIsLeft ? SWITCH_LEFT_PIN : SWITCH_RIGHT_PIN;
 	digitalWrite(pin, HIGH);
-	delay(100);
+	delay(50);
 	digitalWrite(pin, LOW);
 }
 
@@ -367,15 +389,19 @@ void updateDisplay() {
 		lcd.print("%  ");
 	  
 		lcd.setCursor(0, 1);
-		lcd.print("Gsw:");
-		if (detectedSpeed >= 0) {
-			lcd.print(detectedSpeed);
-			lcd.print("mm/s");
-			lcd.print(" ");
-			lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
-		} else {
-			lcd.print("messen...    ");
-		}
+		lcd.print("I= ");
+		int mV = map(railCurrent, 0, 1023, 0, 5000); //not precise
+		lcd.print(mv * 2);
+		lcd.print(" mA");
+		// lcd.print("Gsw:");
+		// if (detectedSpeed >= 0) {
+		// 	lcd.print(detectedSpeed);
+		// 	lcd.print("mm/s");
+		// 	lcd.print(" ");
+		// 	lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
+		// } else {
+		// 	lcd.print("messen...    ");
+		// }
 		lastRefresh = ts;
 	}
 }
