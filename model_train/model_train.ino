@@ -29,7 +29,7 @@ constexpr int STA2_DIST = 1330;//From sensor to Station platform 2, mm
 constexpr int WORLD_SCALE=160; // N-scale 1:160
 
 //Fine-tunes
-constexpr int MOTOR_CUTOFF=23 * 255 / 100; //%, train doesn't move at lower PWM duty
+constexpr int MOTOR_CUTOFF=24 * 255 / 100; //%, train doesn't move at lower PWM duty
 constexpr int MOTOR_MAX_REAL=55 * 255 / 100; //55%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
 
 // //////////////////////////////
@@ -47,7 +47,7 @@ const int GREEN_LED = A3;
 const int BUTTON_1 = A4;//trigger speed measure
 const int BUTTON_2 = A5;//play whistle, switch rails
 const int SPEED_HANDLE = A6; //Voltage dividor, optionally linear potentiometer as option with direct speed mapping
-const int RAIL_CURRENT = A7; //TODO short circuit
+const int RAIL_CURRENT = A7; // short circuit detector
 
 //IR beam 36KHz on Timer1, works only for D9 pin
 const int IR_BEAM = 9;
@@ -74,11 +74,12 @@ const int LCD_D7 = 12;
 //
 // Run params
 //
-const int LCD_REFRESH = 1000 / 5; // 5Hz
+const int LCD_REFRESH = 1000 / 2; // 5Hz
 // Motor operation range
 const int MIN_PWM = -255; //Set to 0 if no relay installed
 const int MAX_PWM = 255;
-const int MAX_RAIL_CURRENT = 200; //mA
+const int MAX_RAIL_CURRENT = 400; //mA
+const int CURRENT_RESISTOR = 500; //mOhm
 
 // Global vars
 bool sensorInstalled = false;
@@ -155,7 +156,7 @@ void setup() {
 	lcd.print("von Roman & Vad");
 	delay(2000);
 	
-	//Serial.begin(9600);
+	Serial.begin(9600);
 	
 	// Configure Timer1 for 36 kHz
 	// I don't give a fuck about arduino registers
@@ -204,7 +205,7 @@ void operationLoop() {
 	updateMotor();
 	updateDisplay();
 	updateTrafficLights();
-	//TODO: Kurzschluss check
+	//Kurzschluss check
 	monitorCurrent(20); //update env at 50Hz
 }
 
@@ -262,11 +263,14 @@ void monitorCurrent(long delayMS) {
 		unsigned maxVal = 0;
 		for (int i=0; i<10; i++) {
 			maxVal = max(maxVal, analogRead(RAIL_CURRENT));
-			delayMicroseconds(99);
+			delayMicroseconds(50);
 		}
 		maxLocal = max(maxVal, maxLocal);
 		//Emergency stop if exceeds limit
-		//TODO
+		long mV = map(maxLocal, 0, 1023, 0, 5000);
+		if (mV * 1000 / CURRENT_RESISTOR > MAX_RAIL_CURRENT) {
+			emergencyStop();
+		}
 	}
 
 	railCurrent = maxLocal;
@@ -284,7 +288,7 @@ void pollButtons() {
 		}
 		//kickstart engine
 		setMotorPower(255);
-		delay(5);
+		monitorCurrent(5);
 		setMotorPower(pwmDuty);
 	}
 	
@@ -384,24 +388,23 @@ void updateDisplay() {
 	long ts = millis();
 	if (ts - lastRefresh > LCD_REFRESH) {
 		lcd.setCursor(0, 0); //clear is slow
-		lcd.print("Lst:");
+		lcd.print("Lst=");
 		lcd.print(pwmDuty * 100 / 255);
-		lcd.print("%  ");
-	  
+		lcd.print("% ");
+		lcd.print("I=");
+		long mV = map(railCurrent, 0, 1023, 0, 5000);//0..5V
+		lcd.print(mV * 1000 / CURRENT_RESISTOR); // U/R
+		lcd.print("mA  ");
 		lcd.setCursor(0, 1);
-		lcd.print("I= ");
-		int mV = map(railCurrent, 0, 1023, 0, 5000); //not precise
-		lcd.print(mv * 2);
-		lcd.print(" mA");
-		// lcd.print("Gsw:");
-		// if (detectedSpeed >= 0) {
-		// 	lcd.print(detectedSpeed);
-		// 	lcd.print("mm/s");
-		// 	lcd.print(" ");
-		// 	lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
-		// } else {
-		// 	lcd.print("messen...    ");
-		// }
+		lcd.print("Gsw:");
+		if (detectedSpeed >= 0) {
+			lcd.print(detectedSpeed);
+			lcd.print("mm/s");
+			lcd.print(" ");
+			lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
+		} else {
+			lcd.print("messen...    ");
+		}
 		lastRefresh = ts;
 	}
 }
@@ -502,18 +505,18 @@ void whistleBlast(int totalDuration) {
 		if (progr < 10) {
 			int freq = 2500 + progr * 30;   // rise from 2.5kHz to ~3.4kHz 
 			tone(SPEAKER_PIN, freq);
-			delay(15 + (20 * (10 - progr))); // more interruptions early
+			monitorCurrent(15 + (20 * (10 - progr))); // more interruptions early
 			noTone(SPEAKER_PIN);
-			delay(10);
+			monitorCurrent(10);
 		}
 		
 		// Chaos Phase
 		else {
 			int freq = random(2600, 3000);
 			tone(SPEAKER_PIN, freq);
-			delay(random(12, 12));
+			monitorCurrent(random(12, 12));
 			noTone(SPEAKER_PIN);
-			delay(random(3, 6));
+			monitorCurrent(random(3, 6));
 		}
 	}
 }
@@ -544,7 +547,7 @@ void updateDemoState() {
 				detectedSpeed=-1;
 				pwmDuty = 0;
 				setMotorPower(0);
-				delay(200);
+				monitorCurrent(200);
 				setMotorReverse(false);
 				switchIsLeft = false;
 				toggleSwitch();
@@ -565,24 +568,26 @@ void updateDemoState() {
 				loops++;
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(MOTOR_CUTOFF + 8, MOTOR_MAX_REAL - 20);
+				pwmDuty = random(MOTOR_CUTOFF + 8, MOTOR_MAX_REAL - 10);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=4) {
 					setMotorPower(duty);
-					delay(100);
+					monitorCurrent(100);
 				}
 				setMotorPower(pwmDuty);
 			break;
 			case DemoDetectSpeed:
 				//can take a while, maybe introduce timeout error
 				//detectionTS is a moment when train nose hits the sensor
-				while ((detectionTS = pollTrainSensor(true)) == 0) {};
+				while ((detectionTS = pollTrainSensor(true)) == 0) {
+					monitorCurrent(1);
+				};
 				// program continues when whole train passes the sensor
 				lcd.clear();
 				lcd.write("x160:"); lcd.print(detectedSpeed*36*16/1000); lcd.print("km/h");
 				lcd.setCursor(0, 1);
 				lcd.write("Gsw:"); lcd.print(detectedSpeed); lcd.print("mm/s");
-				platform2 = (loops % 3) == 0;
+				platform2 = (loops % 2) == 0;
 				
 				if (platform2) toggleSwitch();
 				
@@ -601,7 +606,7 @@ void updateDemoState() {
 				}
 
 				//Let it drive w/ initial speed
-				delay(dist * 1000 / detectedSpeed - (millis()-detectionTS));
+				monitorCurrent(dist * 1000 / detectedSpeed - (millis()-detectionTS));
 				//Time to slow down, 'brakingDist' till stop
 				digitalWrite(GREEN_LED, LOW);
 				digitalWrite(RED_LED, HIGH);
@@ -632,7 +637,7 @@ void updateDemoState() {
 
 					int pwm = cuttOff + (long)spd * 100 / speedToPWM;  // inside 0-255 range!
 					setMotorPower(pwm);
-					delay(100);
+					monitorCurrent(100);
 				}
 				setMotorPower(0);
 			}
@@ -648,19 +653,25 @@ void updateDemoState() {
 					setMotorReverse(true);
 					setMotorPower(35*255/100);
 					while (pollTrainSensor(true) == 0) {
-						delay(50);
+						monitorCurrent(50);
 					}
 					//At this moment last cart has passed the sensor
 					//TRACK_LEN-STA_DIST to go
 					//Cart is 1.5 shorter, so
-					int speed = detectedSpeed * 3 / 2;
-					delay((TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed);
+					int speed = detectedSpeed * 2 / 3;
+					Serial.print("spd:");
+					Serial.println(speed);
+					long wait = (TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed;
+					Serial.print("Distance to station:");
+					Serial.print(TRACK_LEN-STA_DIST+TRAIN_LEN);
+					Serial.println("mm");
+					monitorCurrent(wait);
 					
 					setMotorPower(MOTOR_CUTOFF);
-					delay(500);
+					monitorCurrent(500);
 					setMotorPower(0);
 					toggleSwitch();
-					delay(200);
+					monitorCurrent(200);
 					setMotorReverse(false);
 				}
 			break;
@@ -692,4 +703,15 @@ void updateDemoState() {
 		stageProcessed = false;
 	}
   
+}
+
+void emergencyStop() {
+	digitalWrite(MOTOR_PWM_PIN, LOW);
+	delay(1);
+	digitalWrite(MOTOR_RELAY_PIN, LOW);
+	lcd.clear();
+	lcd.print("Fehler");
+	lcd.setCursor(0, 1);
+	lcd.print("Kurzschluss");
+	exit(0);
 }
