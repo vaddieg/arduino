@@ -380,7 +380,7 @@ void setMotorReverse(bool rev) {
 void ensureSwitchPos() {
 	static unsigned long lastRefresh = 0;
 	long ts = millis();
-	if (ts - lastRefresh > 2000) {
+	if (ts - lastRefresh > 2000 && pwmDuty != 0) {
 		switchIsLeft = !switchIsLeft;
 		toggleSwitch();
 		lastRefresh = ts;
