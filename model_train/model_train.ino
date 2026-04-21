@@ -381,8 +381,10 @@ void ensureSwitchPos() {
 	static unsigned long lastRefresh = 0;
 	long ts = millis();
 	if (ts - lastRefresh > 2000 && pwmDuty != 0) {
-		switchIsLeft = !switchIsLeft;
-		toggleSwitch();
+		int pin = switchIsLeft ? SWITCH_LEFT_PIN : SWITCH_RIGHT_PIN;
+		digitalWrite(pin, HIGH);
+		monitorCurrent(5);
+		digitalWrite(pin, LOW);
 		lastRefresh = ts;
 	}
 }
@@ -391,7 +393,7 @@ void toggleSwitch() {
 	switchIsLeft = !switchIsLeft;
 	int pin = switchIsLeft ? SWITCH_LEFT_PIN : SWITCH_RIGHT_PIN;
 	digitalWrite(pin, HIGH);
-	monitorCurrent(50);
+	monitorCurrent(40);
 	digitalWrite(pin, LOW);
 }
 
@@ -675,7 +677,7 @@ void updateDemoState() {
 					int speed = detectedSpeed * 2 / 3;
 					Serial.print("spd:");
 					Serial.println(speed);
-					long wait = (TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed;
+					long wait = ((long)TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed;
 					Serial.print("Distance to station:");
 					Serial.print(TRACK_LEN-STA_DIST+TRAIN_LEN);
 					Serial.println("mm");
