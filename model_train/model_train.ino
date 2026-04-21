@@ -15,12 +15,12 @@
 #include <LiquidCrystal.h>
 
 // Use a potentiometer as input instead of step +/- buttons
-#define ANALOG_THROTTLE 0
+#define ANALOG_THROTTLE 1
 // There's Arduino HAT format PCB with different PIN connections
 #define ARDUINO_HAT 0
 
 //Track Geometry
-//Curved track: outer length 155, inner length 150
+//PIKO curved track piece: outer length 155, inner length 150
 constexpr int TRAIN_LEN=112; //locomotive, mm
 constexpr int TRAIN_CLEN=TRAIN_LEN * 152 / 145; //Observable length in the curve, where sensor located
 constexpr int TRACK_LEN=152*8+2*240+2*110+2*50; //1980mm outer loop length
@@ -28,9 +28,17 @@ constexpr int STA_DIST=1450; //From sensor to Station platform 1, mm
 constexpr int STA2_DIST = 1330;//From sensor to Station platform 2, mm
 constexpr int WORLD_SCALE=160; // N-scale 1:160
 
-//Fine-tunes
+//////////////////////////
+// Params and fine-tunes
+//////////////////////////
 constexpr int MOTOR_CUTOFF=24 * 255 / 100; //%, train doesn't move at lower PWM duty
 constexpr int MOTOR_MAX_REAL=55 * 255 / 100; //55%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
+const int LCD_REFRESH = 1000 / 2; // 2Hz
+// Motor operation range
+const int MIN_PWM = -255; //Set to 0 if no relay installed
+const int MAX_PWM = 255;
+const int MAX_RAIL_CURRENT = 500; //mA
+const int SENTINEL_RESISTOR = 500; //mOhm, R9 on the schematic
 
 // //////////////////////////////
 // Pin definitions
@@ -70,16 +78,6 @@ const int LCD_D5 = 10;
 const int LCD_D6 = 11;
 const int LCD_D7 = 12;
 #endif
-
-//
-// Run params
-//
-const int LCD_REFRESH = 1000 / 2; // 5Hz
-// Motor operation range
-const int MIN_PWM = -255; //Set to 0 if no relay installed
-const int MAX_PWM = 255;
-const int MAX_RAIL_CURRENT = 400; //mA
-const int CURRENT_RESISTOR = 500; //mOhm
 
 // Global vars
 bool sensorInstalled = false;
@@ -205,6 +203,7 @@ void operationLoop() {
 	updateMotor();
 	updateDisplay();
 	updateTrafficLights();
+	ensureSwitchPos();
 	//Kurzschluss check
 	monitorCurrent(20); //update env at 50Hz
 }
@@ -268,7 +267,8 @@ void monitorCurrent(long delayMS) {
 		maxLocal = max(maxVal, maxLocal);
 		//Emergency stop if exceeds limit
 		long mV = map(maxLocal, 0, 1023, 0, 5000);
-		if (mV * 1000 / CURRENT_RESISTOR > MAX_RAIL_CURRENT) {
+		if (mV * 1000 / SENTINEL_RESISTOR > MAX_RAIL_CURRENT) {
+			railCurrent = maxLocal;
 			emergencyStop();
 		}
 	}
@@ -357,7 +357,7 @@ void updateMotor() {
 	// Too frequent calls might drop effective PWM duty cycles
 	static unsigned long lastRefresh = 0;
 	long ts = millis();
-	if (ts - lastRefresh > 50) {
+	if (ts - lastRefresh > 20) {
 		setMotorPower(pwmDuty);
 		setMotorReverse(pwmDuty < 0);
 		lastRefresh = ts;
@@ -375,11 +375,23 @@ void setMotorReverse(bool rev) {
 	digitalWrite(MOTOR_RELAY_PIN, rev ? HIGH : LOW);
 }
 
+// Since we don't have a feedback signal from rail switch
+// we trigger same electro-magent to ensure good contact
+void ensureSwitchPos() {
+	static unsigned long lastRefresh = 0;
+	long ts = millis();
+	if (ts - lastRefresh > 2000) {
+		switchIsLeft = !switchIsLeft;
+		toggleSwitch();
+		lastRefresh = ts;
+	}
+}
+
 void toggleSwitch() {
 	switchIsLeft = !switchIsLeft;
 	int pin = switchIsLeft ? SWITCH_LEFT_PIN : SWITCH_RIGHT_PIN;
 	digitalWrite(pin, HIGH);
-	delay(50);
+	monitorCurrent(50);
 	digitalWrite(pin, LOW);
 }
 
@@ -393,7 +405,7 @@ void updateDisplay() {
 		lcd.print("% ");
 		lcd.print("I=");
 		long mV = map(railCurrent, 0, 1023, 0, 5000);//0..5V
-		lcd.print(mV * 1000 / CURRENT_RESISTOR); // U/R
+		lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
 		lcd.print("mA  ");
 		lcd.setCursor(0, 1);
 		lcd.print("Gsw:");
@@ -590,6 +602,7 @@ void updateDemoState() {
 				platform2 = (loops % 2) == 0;
 				
 				if (platform2) toggleSwitch();
+				else ensureSwitchPos();
 				
 			break;
 			case DemoSlowdown:
@@ -650,6 +663,7 @@ void updateDemoState() {
 			case DemoReverse:
 				// We return it to platform 1
 				if (platform2)  {
+					ensureSwitchPos();
 					setMotorReverse(true);
 					setMotorPower(35*255/100);
 					while (pollTrainSensor(true) == 0) {
@@ -665,6 +679,10 @@ void updateDemoState() {
 					Serial.print("Distance to station:");
 					Serial.print(TRACK_LEN-STA_DIST+TRAIN_LEN);
 					Serial.println("mm");
+					Serial.print("Time to travel:");
+					Serial.print(wait);
+					Serial.println("ms");
+					
 					monitorCurrent(wait);
 					
 					setMotorPower(MOTOR_CUTOFF);
@@ -679,6 +697,7 @@ void updateDemoState() {
 					//  0123456789ABCDEF
 				str1 = "Abfahrt jetzt";
 				str2 = "bitte einsteigen";
+				ensureSwitchPos();
 			break;
 
 			case DemoEnd:
@@ -706,11 +725,15 @@ void updateDemoState() {
 }
 
 void emergencyStop() {
+	digitalWrite(IR_BEAM, LOW);
 	digitalWrite(MOTOR_PWM_PIN, LOW);
 	delay(1);
 	digitalWrite(MOTOR_RELAY_PIN, LOW);
 	lcd.clear();
-	lcd.print("Fehler");
+	lcd.print("Ausfall:");
+	long mV = map(railCurrent, 0, 1023, 0, 5000);//0..5V
+	lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
+	lcd.print("mA");
 	lcd.setCursor(0, 1);
 	lcd.print("Kurzschluss");
 	exit(0);
