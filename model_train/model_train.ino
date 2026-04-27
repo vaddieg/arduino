@@ -23,22 +23,22 @@
 //PIKO curved track piece: outer length 155, inner length 150
 constexpr int TRAIN_LEN=112; //locomotive, mm
 constexpr int TRAIN_CLEN=TRAIN_LEN * 152 / 145; //Observable length in the curve, where sensor located
-constexpr int TRACK_LEN=152*8+2*240+2*110+2*50; //1980mm outer loop length
-constexpr int STA_DIST=1450; //From sensor to Station platform 1, mm
-constexpr int STA2_DIST = 1330;//From sensor to Station platform 2, mm
+constexpr int TRACK_LEN=152*8+2*240+2*110+2*55; //1980mm outer loop length
+constexpr int STA_DIST=152+240+110+4*152+240+55; //1450; //From sensor to Station platform 1, mm
+constexpr int STA2_DIST = 1320 + 50;//From sensor to Station platform 2, mm, +compensate wire resistance
 constexpr int WORLD_SCALE=160; // N-scale 1:160
 
 //////////////////////////
 // Params and fine-tunes
 //////////////////////////
-constexpr int MOTOR_CUTOFF=24 * 255 / 100; //%, train doesn't move at lower PWM duty
+constexpr int MOTOR_CUTOFF=22 * 255 / 100; //%, train doesn't move at lower PWM duty
 constexpr int MOTOR_MAX_REAL=55 * 255 / 100; //55%, at this power train moves 140km/h, which is MAX for 1970s DR Class V119 diesel loc
 const int LCD_REFRESH = 1000 / 2; // 2Hz
 // Motor operation range
 const int MIN_PWM = -255; //Set to 0 if no relay installed
 const int MAX_PWM = 255;
 const int MAX_RAIL_CURRENT = 500; //mA
-const int SENTINEL_RESISTOR = 500; //mOhm, R9 on the schematic
+const int SENTINEL_RESISTOR = 487; //mOhm, R9 on the schematic
 
 // //////////////////////////////
 // Pin definitions
@@ -135,8 +135,10 @@ void setup() {
 	
 	pinMode(BUTTON_1, INPUT_PULLUP);
 	pinMode(BUTTON_2, INPUT_PULLUP);
-	pinMode(SPEED_HANDLE, INPUT);
-	pinMode(RAIL_CURRENT, INPUT);
+
+	analogReference(INTERNAL);
+	pinMode(SPEED_HANDLE, INPUT); //this is connected to 0..5V divider
+	pinMode(RAIL_CURRENT, INPUT); //this uses internal 1.1V reference
 
 	if (digitalRead(BUTTON_1) == LOW && digitalRead(BUTTON_2) == LOW) {
 		setupMode = true;
@@ -243,9 +245,9 @@ long pollTrainSensor(bool detect_speed) {
 		if (!detect_speed) return start_ts;
 
 		//Filter out unstable beam on train edges
-		delay(100); //no train can sneak through in 0.1s
+		monitorCurrent(100); //no train can sneak through in 0.1s
 		while (millis() < start_ts + 12000) {//locomotive can't pass longer than 12s?
-			delay(10); //poll at ~100hz, sensor isn't too fast
+			monitorCurrent(10); //poll at ~100hz, sensor isn't too fast
 			if (_expectLevel(LOW)) { //BEAM restored
 				detectedSpeed = constrain((long)TRAIN_CLEN * 1000 / (millis() - start_ts), 1, 999);
 				return start_ts;
@@ -259,21 +261,19 @@ void monitorCurrent(long delayMS) {
 	long start = millis();
 	unsigned maxLocal = 0;
 	while (millis()-start < delayMS) {
-		unsigned maxVal = 0;
-		for (int i=0; i<10; i++) {
-			maxVal = max(maxVal, analogRead(RAIL_CURRENT));
-			delayMicroseconds(50);
-		}
-		maxLocal = max(maxVal, maxLocal);
+		
+		maxLocal = max(maxLocal, analogRead(RAIL_CURRENT));
+		railCurrent = maxLocal;
+		delayMicroseconds(10);
+		
 		//Emergency stop if exceeds limit
-		long mV = map(maxLocal, 0, 1023, 0, 5000);
+		long mV = map(maxLocal, 0, 1023, 0, 1100); //1.1v ref voltage
 		if (mV * 1000 / SENTINEL_RESISTOR > MAX_RAIL_CURRENT) {
-			railCurrent = maxLocal;
-			emergencyStop();
+ 			emergencyStop();
 		}
 	}
 
-	railCurrent = maxLocal;
+	
 }
 
 void pollButtons() {
@@ -303,8 +303,11 @@ void pollButtons() {
 		toggleSwitch();
 		whistleBlast(1500); //During the whistle sensor is inactive
 	}
-	
+
+	analogReference(DEFAULT);
 	int handle = analogRead(SPEED_HANDLE); //0..1023
+	analogReference(INTERNAL);
+
 	const int deadZone = 50;
 	const int center = 512;
 	
@@ -406,7 +409,7 @@ void updateDisplay() {
 		lcd.print(pwmDuty * 100 / 255);
 		lcd.print("% ");
 		lcd.print("I=");
-		long mV = map(railCurrent, 0, 1023, 0, 5000);//0..5V
+		long mV = map(railCurrent, 0, 1023, 0, 1100);//0..1.1V
 		lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
 		lcd.print("mA  ");
 		lcd.setCursor(0, 1);
@@ -582,13 +585,14 @@ void updateDemoState() {
 				loops++;
 				str1 = "Los!";
 				str2 = " ";
-				pwmDuty = random(MOTOR_CUTOFF + 8, MOTOR_MAX_REAL - 10);
+				pwmDuty = random(MOTOR_CUTOFF + 20, MOTOR_MAX_REAL - 20);
 				// Simplified few-step acceleration
 				for (int duty = MOTOR_CUTOFF; duty <= pwmDuty; duty+=4) {
 					setMotorPower(duty);
-					monitorCurrent(100);
+					monitorCurrent(200);
 				}
 				setMotorPower(pwmDuty);
+				checkTrainContact();
 			break;
 			case DemoDetectSpeed:
 				//can take a while, maybe introduce timeout error
@@ -601,7 +605,7 @@ void updateDemoState() {
 				lcd.write("x160:"); lcd.print(detectedSpeed*36*16/1000); lcd.print("km/h");
 				lcd.setCursor(0, 1);
 				lcd.write("Gsw:"); lcd.print(detectedSpeed); lcd.print("mm/s");
-				platform2 = (loops % 2) == 0;
+				platform2 = (loops % 4) == 0;
 				
 				if (platform2) toggleSwitch();
 				else ensureSwitchPos();
@@ -609,20 +613,34 @@ void updateDemoState() {
 			break;
 			case DemoSlowdown:
 			{
-				//At this point we know the speed and remaining distance to the station
-				//STA_DIST - TRAIN_LEN;
-				//But we want to start slowing down 320mm before destination
+				// 1. Tuning Parameters
+				long brakingDist = 500;      
+				long brakeSoftness = 1;      
 				
-				int brakingDist = 280;
-				long dist = platform2 ? STA2_DIST - brakingDist : STA_DIST - brakingDist;
+				// NEW: Tuning the "depth" of the curve. 
+				// 0 = Linear, 1000 = Quadratic. Try 400-500 for a balanced feel.
+				long quadraticStrength = 220; 
 
-				if (detectedSpeed*36*16/1000 > 90 && !platform2) { //extra loop when 90+ km/h
-					dist+=TRACK_LEN; //add full circle if express(fast) train 
+				// 2. Determine Target Platform
+				int targetPlatform = platform2 ? STA2_DIST : STA_DIST;
+				long distToStation = targetPlatform - brakingDist - TRAIN_LEN;
+
+				if (detectedSpeed * 36 * 16 / 1000 > 99 && !platform2) { 
+					distToStation += TRACK_LEN; 
 				}
 
-				//Let it drive w/ initial speed
-				monitorCurrent(dist * 1000 / detectedSpeed - (millis()-detectionTS));
-				//Time to slow down, 'brakingDist' till stop
+				// Cruise
+				long cruiseTimeMs = (distToStation * 1000L) / detectedSpeed;
+				monitorCurrent(cruiseTimeMs);
+
+				// 3. Physics Setup
+				long initialSpeed = (long)detectedSpeed;
+				long decel_milli = (initialSpeed * initialSpeed * 1000L) / (2L * brakingDist * brakeSoftness);
+				if (decel_milli == 0) decel_milli = 1; 
+
+				long totalBrakeTimeMs = (initialSpeed * 1000000L) / decel_milli;
+
+				// 4. Setup Display/LEDs
 				digitalWrite(GREEN_LED, LOW);
 				digitalWrite(RED_LED, HIGH);
 				lcd.clear();
@@ -630,33 +648,51 @@ void updateDemoState() {
 				lcd.setCursor(0, 1);
 				lcd.write("Gleis ");
 				lcd.write(platform2 ? "2" : "1");
-				
-				//Linear deceleration from arbitrary train speed to full stop, reality is more complicated 
-				//pwmDuty -> MOTOR_CUTOFF, assume linear speed dependency
-				// 240mm till stop point
-				long decelerate = (long)detectedSpeed * detectedSpeed / brakingDist / 2; //a=-v^2 / 2d, mm/s^2
-                int timeToStop = 10*detectedSpeed / decelerate; //deci-seconds till speed reaches zero
-				
-				//Linear Speed to PWM interpolation (shiity. need to calculate instead)
-				int cuttOff = MOTOR_CUTOFF - 7;
-				long speedToPWM = 100*detectedSpeed / (pwmDuty - cuttOff);
-				//Serial.print("PWM CONST: "); Serial.println(speedToPWM);
 
-				//Ensure values at limits, aka unit test
-				// Serial.print("CURR SPEED PWM:"); Serial.println(cuttOff + (long)detectedSpeed * 100 / speedToPWM );
-				// Serial.print("HALF SPEED PWM:"); Serial.println(cuttOff + (long)detectedSpeed / 2 * 100 / speedToPWM );
-				// Serial.print("ZERO SPEED PWM:"); Serial.println(cuttOff + 0 * speedToPWM / 100);
+				int startPWM = pwmDuty;
+				int minPWM = MOTOR_CUTOFF - 3;
+				unsigned long brakeStartTime = millis();
 
-				for (int i=0; i<timeToStop; i++) {
-					int spd = (detectedSpeed * 10 - i * decelerate) / 10;
+				// 5. braking Loop
+				while (millis() - brakeStartTime < totalBrakeTimeMs) {
+					unsigned long elapsedMs = millis() - brakeStartTime;
 
-					int pwm = cuttOff + (long)spd * 100 / speedToPWM;  // inside 0-255 range!
-					setMotorPower(pwm);
-					monitorCurrent(100);
+					// Calculate Current Speed
+					long speedReduction = (decel_milli * elapsedMs) / 1000000L;
+					long currentSpeed = initialSpeed - speedReduction;
+					if (currentSpeed < 0) currentSpeed = 0;
+
+					// Speed to PWM mapping (Linear + Quadratic)
+					int currentPWM = minPWM;
+					if (initialSpeed > 0) {
+						long pwmRange = (long)startPWM - minPWM;
+						
+						// Calculate Linear Ratio (0 to 1000)
+						long ratioLin = (currentSpeed * 1000L) / initialSpeed;
+						
+						// Calculate Quadratic Ratio (0 to 1000)
+						// (ratio^2 / 1000) keeps it in the 0-1000 range
+						long ratioQuad = (ratioLin * ratioLin) / 1000L;
+
+						// Blend them: Result = (Linear * (1-strength)) + (Quadratic * strength)
+						long ratioBlended = (ratioLin * (1000 - quadraticStrength) + ratioQuad * quadraticStrength) / 1000;
+						
+						currentPWM = minPWM + (int)((pwmRange * ratioBlended) / 1000);
+					}
+
+					// Ensure PWM is in motor operational range
+					if (currentPWM > startPWM) currentPWM = startPWM;
+					if (currentPWM < minPWM) currentPWM = minPWM;
+
+					setMotorPower(currentPWM);
+					monitorCurrent(50); 
 				}
+
 				setMotorPower(0);
 			}
 			break;
+
+
 			case DemoStationStop:
 					//  0123456789ABCDEF
 				str1 = "Zug endet hier";
@@ -668,6 +704,7 @@ void updateDemoState() {
 					ensureSwitchPos();
 					setMotorReverse(true);
 					setMotorPower(35*255/100);
+					checkTrainContact();
 					while (pollTrainSensor(true) == 0) {
 						monitorCurrent(50);
 					}
@@ -687,7 +724,7 @@ void updateDemoState() {
 					
 					monitorCurrent(wait);
 					
-					setMotorPower(MOTOR_CUTOFF);
+					setMotorPower(MOTOR_CUTOFF+10);
 					monitorCurrent(500);
 					setMotorPower(0);
 					toggleSwitch();
@@ -726,6 +763,19 @@ void updateDemoState() {
   
 }
 
+void checkTrainContact() {
+	monitorCurrent(5);
+	if (railCurrent == 0) {
+		lcd.clear();
+		lcd.print("Lokkontakt?");
+		while (railCurrent == 0) {
+			monitorCurrent(500);
+		}
+		lcd.clear();
+		lcd.print("klar");
+	}
+}
+
 void emergencyStop() {
 	digitalWrite(IR_BEAM, LOW);
 	digitalWrite(MOTOR_PWM_PIN, LOW);
@@ -733,7 +783,7 @@ void emergencyStop() {
 	digitalWrite(MOTOR_RELAY_PIN, LOW);
 	lcd.clear();
 	lcd.print("Ausfall:");
-	long mV = map(railCurrent, 0, 1023, 0, 5000);//0..5V
+	long mV = map(railCurrent, 0, 1023, 0, 1100);//0..1.1V
 	lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
 	lcd.print("mA");
 	lcd.setCursor(0, 1);
