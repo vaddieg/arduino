@@ -532,7 +532,13 @@ void updateDemoState() {
 				while ((detectionTS = pollTrainSensor(true)) == 0) {
 					monitorCurrent(1);
 				};
-				// program continues when whole train passes the sensor
+				// NOTE: program continues when whole train passes the sensor
+				
+				#if USE_HORN
+				// In my setup crossing is just after sensor, time to HORN!
+				playHorn();
+				#endif
+				
 				lcd.clear();
 				lcd.print(F("x160:")); lcd.print(detectedSpeed*36*16/1000); lcd.print(F("km/h"));
 				lcd.setCursor(0, 1);
@@ -549,8 +555,8 @@ void updateDemoState() {
 				long brakingDist = 500;      
 				long brakeSoftness = 1;      
 				
-				// NEW: Tuning the "depth" of the curve. 
-				// 0 = Linear, 1000 = Quadratic. Try 400-500 for a balanced feel.
+				// Tuning the "depth" of the curve. 
+				// 0 = Linear, 1000 = Quadratic.
 				long quadraticStrength = 220; 
 
 				// 2. Determine Target Platform
