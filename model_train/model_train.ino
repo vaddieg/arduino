@@ -12,8 +12,12 @@
  * Traction: 270 kN
  */
 
-#include <LiquidCrystal.h>
+//#include <LiquidCrystal.h>
+#include "MiniLCD.h" //(saves 500 bytes of EEPROM!)
+#include "AudioFile.h"
 
+// Play horn audio sample, requires 8 Ohm speaker instead of buzzer
+#define USE_HORN 1
 // Use a potentiometer as input instead of step +/- buttons
 #define ANALOG_THROTTLE 1
 // There's Arduino HAT format PCB with different PIN connections
@@ -57,7 +61,7 @@ const int BUTTON_2 = A5;//play whistle, switch rails
 const int SPEED_HANDLE = A6; //Voltage dividor, optionally linear potentiometer as option with direct speed mapping
 const int RAIL_CURRENT = A7; // short circuit detector
 
-//IR beam 36KHz on Timer1, works only for D9 pin
+//IR beam 36KHz on Timer1, works only for TIMER1 (D9 pin)
 const int IR_BEAM = 9;
 const int IR_SENSOR = 2;
 
@@ -89,6 +93,12 @@ unsigned railCurrent = 0; //Actually a mapped voltage  on a 0.5 Ohm resistor
 unsigned long lastThrottleUpdate = 0;
 #endif
 
+#if USE_HORN
+volatile uint8_t volume = 0;
+const uint16_t wavSize = sizeof(horn_short_11k_wav);
+volatile uint16_t sampleIndex = 44; //raw data offset in wav
+#endif
+
 int pwmDuty = 0; //(MIN_PWM..MAX_PWM) negative value is for motor reverse
 
 bool demoMode = false;
@@ -113,10 +123,11 @@ const int stageLengs[] = {0, 2000, 2000, 2000, 0, 0, 10000, 0, 5000, 0};
 
 
 // LCD setup
-LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+//LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+MiniLCD lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 void setup() {
-	
+	lcd.begin(16, 2);
 	//Motor
 	pinMode(MOTOR_PWM_PIN, OUTPUT);
 	pinMode(MOTOR_RELAY_PIN, OUTPUT);
@@ -151,12 +162,12 @@ void setup() {
 	digitalWrite(GREEN_LED, LOW);
 	
 	lcd.begin(16, 2);
-	lcd.print("N Eisenbahn v0.2");
+	lcd.print(F("N Eisenbahn v0.2"));
 	lcd.setCursor(0, 1);
-	lcd.print("von Roman & Vad");
+	lcd.print(F("von Roman & Vad"));
 	delay(2000);
 	
-	Serial.begin(9600);
+	//Serial.begin(9600);
 	
 	// Configure Timer1 for 36 kHz
 	// I don't give a fuck about arduino registers
@@ -180,7 +191,7 @@ void setup() {
 	
 	if (!sensorInstalled) {
 		lcd.clear();
-		lcd.print("Ohne Sensor");
+		lcd.print(F("Ohne Sensor"));
 		delay(1000);
 	}
 
@@ -200,7 +211,10 @@ void operationLoop() {
 	pollButtons();
 	
 	if (sensorInstalled && pwmDuty && pollTrainSensor(detectedSpeed == -1)) {
-		playTone(400, 5);
+		// playTone(400, 5);
+		// tone(SPEAKER_PIN, 400, 5);
+		// delay(5);
+		// noTone(SPEAKER_PIN);
 	}
 	updateMotor();
 	updateDisplay();
@@ -411,12 +425,12 @@ void updateDisplay() {
 		lcd.print("I=");
 		long mV = map(railCurrent, 0, 1023, 0, 1100);//0..1.1V
 		lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
-		lcd.print("mA  ");
+		lcd.print(F("mA  "));
 		lcd.setCursor(0, 1);
-		lcd.print("Gsw:");
+		lcd.print(F("Gsw:"));
 		if (detectedSpeed >= 0) {
 			lcd.print(detectedSpeed);
-			lcd.print("mm/s");
+			lcd.print(F("mm/s"));
 			lcd.print(" ");
 			lcd.print(detectedSpeed * 36 * 16 / 1000); // kmh: 3.6 * 160 / 1000 
 		} else {
@@ -426,91 +440,9 @@ void updateDisplay() {
 	}
 }
 
-void playTone(int freq, int duration) {
-	tone(SPEAKER_PIN, freq, duration);
-	delay(duration); //TODO: check if blocking necessary
-	noTone(SPEAKER_PIN);
-}
-
-//uint8_t fastSine(uint8_t phase) {
-	//static const uint8_t quarterSine[64] = {
-		//0, 0, 1, 1, 2, 3, 4,
-		//5, 6, 8, 9, 11, 13, 15, 17,
-	//20, 22, 25, 27, 30, 33, 36, 40,
-	//43, 47, 50, 54, 58, 62, 66, 71,
-	//75, 80, 84, 89, 94, 99, 104, 109,
-	//114, 119, 125, 130, 136, 141, 147, 153,
-	//158, 164, 170, 176, 182, 188, 194, 200,
-	//206, 213, 219, 225, 231, 238, 244, 250, 255
-	//};
-	
-  //uint8_t quadrant = phase >> 6;   // 0–3
-  //uint8_t index = phase & 0x3F;    // 0–63
-
-	//if (quadrant == 0) {
-		//return quarterSine[index];
-	
-	//else if (quadrant == 1) {
-		//return quarterSine[63 - index];
-	
-	//else if (quadrant == 2) {
-		//return 255 - quarterSine[index];
-	//} 
-	//else {
-		//return 255 - quarterSine[63 - index];
-	//}
-//}
-
-// Proto, if possible to have it w/o DAC
-//void horn(int duration) {
-	//tone(SPEAKER_PIN, 255);
-	//delay(1000);
-	
-	//uint16_t phase1 = 0;
-	//uint16_t phase2 = 0;
-	//uint16_t phase3 = 0;
-
-	//int divisor = pwmDuty * 100 / 255;
-	//if (divisor == 0) divisor = 1;
-
-//// Frequency steps (tune these!)
-	//uint16_t step1 = 255*15/divisor;
-	//uint16_t step2 = 311*15/divisor;
-	//uint16_t step3 = 440*15/divisor;
-	//// Fast PWM on Timer2 (pin 3 = OC2B)
-	//TCCR2A = 0;
-	//TCCR2B = 0;
-	//TCCR2A = _BV(COM2B1) | _BV(WGM20) | _BV(WGM21); // Fast PWM
-	//TCCR2B = _BV(CS20); // no prescaler (~31 kHz PWM)
-	//duration = duration * 10;
-	//while(duration--) {
-		//// advance phases
-		//phase1 += step1;
-		//phase2 += step2;
-		//phase3 += step3;
-
-		//// lookup sine values
-		//uint8_t s1 = fastSine(phase1 >> 8);
-		//uint8_t s2 = fastSine(phase2 >> 8);
-		//uint8_t s3 = fastSine(phase3 >> 8);
-	
-		//// mix signals
-		//uint16_t mix = s1;//s1 + s2 + s3;
-		////mix /= 4;
-	
-		//// output PWM duty cycle
-		//OCR2B = mix;
-	
-		//// crude sample rate control
-		//delayMicroseconds(10);  // adjust for pitch/smoothness
-	//}
-	//OCR2B = 0;
-	//TCCR2A = 0;
-	//TCCR2B = 0;
-//}
-
 void whistleBlast(int totalDuration) {
 	//Traffic whistle with an interrupt ball
+	//Non-block impl is possible with TIMER2 interrupt (TODO)
 	unsigned long start = millis();
 	unsigned long now;
 	
@@ -602,9 +534,9 @@ void updateDemoState() {
 				};
 				// program continues when whole train passes the sensor
 				lcd.clear();
-				lcd.write("x160:"); lcd.print(detectedSpeed*36*16/1000); lcd.print("km/h");
+				lcd.print(F("x160:")); lcd.print(detectedSpeed*36*16/1000); lcd.print(F("km/h"));
 				lcd.setCursor(0, 1);
-				lcd.write("Gsw:"); lcd.print(detectedSpeed); lcd.print("mm/s");
+				lcd.print(F("Gsw:")); lcd.print(detectedSpeed); lcd.print(F("mm/s"));
 				platform2 = (loops % 4) == 0;
 				
 				if (platform2) toggleSwitch();
@@ -644,13 +576,13 @@ void updateDemoState() {
 				digitalWrite(GREEN_LED, LOW);
 				digitalWrite(RED_LED, HIGH);
 				lcd.clear();
-				lcd.write("Ankunft..");
+				lcd.print(F("Ankunft.."));
 				lcd.setCursor(0, 1);
-				lcd.write("Gleis ");
-				lcd.write(platform2 ? "2" : "1");
+				lcd.print(F("Gleis "));
+				lcd.print(platform2 ? "2" : "1");
 
 				int startPWM = pwmDuty;
-				int minPWM = MOTOR_CUTOFF - 3;
+				int minPWM = MOTOR_CUTOFF - 5;
 				unsigned long brakeStartTime = millis();
 
 				// 5. braking Loop
@@ -712,15 +644,7 @@ void updateDemoState() {
 					//TRACK_LEN-STA_DIST to go
 					//Cart is 1.5 shorter, so
 					int speed = detectedSpeed * 2 / 3;
-					Serial.print("spd:");
-					Serial.println(speed);
 					long wait = ((long)TRACK_LEN-STA_DIST+TRAIN_LEN) * 1000 / speed;
-					Serial.print("Distance to station:");
-					Serial.print(TRACK_LEN-STA_DIST+TRAIN_LEN);
-					Serial.println("mm");
-					Serial.print("Time to travel:");
-					Serial.print(wait);
-					Serial.println("ms");
 					
 					monitorCurrent(wait);
 					
@@ -746,9 +670,9 @@ void updateDemoState() {
 
 		if (str1) {
 			lcd.clear();
-			lcd.write(str1);
+			lcd.print(str1); //Check if println or \r\n works
 			lcd.setCursor(0, 1);
-			lcd.write(str2);
+			lcd.print(str2);
 		}
 		stageProcessed = true;
 	}
@@ -767,7 +691,7 @@ void checkTrainContact() {
 	monitorCurrent(5);
 	if (railCurrent == 0) {
 		lcd.clear();
-		lcd.print("Lokkontakt?");
+		lcd.print(F("Lokkontakt?"));
 		while (railCurrent == 0) {
 			monitorCurrent(500);
 		}
@@ -782,11 +706,42 @@ void emergencyStop() {
 	delay(1);
 	digitalWrite(MOTOR_RELAY_PIN, LOW);
 	lcd.clear();
-	lcd.print("Ausfall:");
+	lcd.print(F("Ausfall:"));
 	long mV = map(railCurrent, 0, 1023, 0, 1100);//0..1.1V
 	lcd.print(mV * 1000 / SENTINEL_RESISTOR); // U/R
-	lcd.print("mA");
+	lcd.print(F("mA "));
 	lcd.setCursor(0, 1);
-	lcd.print("Kurzschluss");
+	lcd.print(F("Kurzschluss"));
 	exit(0);
 }
+
+#if USE_HORN
+// Hardcode for 11KHz sample rate, 8-bit uint_8 samples
+void playHorn() {
+	sampleIndex = 44;
+	cli();
+	//Squeeze max out of TIMER2, fast PWM
+	TCCR2A = (1 << WGM20) | (1 << WGM21) | (1 << COM2B1); //62.5kHz
+  	TCCR2B = (1 << CS20); // prescaler = 1
+
+  	// overflow interrupt
+  	TIMSK2 = (1 << TOIE2);
+	sei();
+}
+
+ISR(TIMER2_OVF_vect) {
+	static uint8_t divider = 0;
+	// 62.5kHz / 6 = 10.4kHz (almost 11kHz)
+  	divider++;
+  	if (divider < 6) return; // div by 8 will work for 8kHz wavs
+  	divider = 0;
+
+	uint8_t sample = pgm_read_byte(&horn_short_11k_wav[sampleIndex++]);
+	OCR2B = sample; //Simplest. TODO: try volume ramp-up and linear interpolation at 22kHz, dither
+
+	if (sampleIndex > wavSize) {
+		//unset overflow interrupt
+		TIMSK2 &= ~(1 << TOIE2);
+	}
+}
+#endif
