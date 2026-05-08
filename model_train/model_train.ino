@@ -68,19 +68,19 @@ const int IR_SENSOR = 2;
 // LCD pins (4-bit mode)
 // We try to use right-side pins to drive LCD, avoiding PCB wire intersections
 #if ARDUINO_HAT
-const int LCD_RS = 12;
-const int LCD_EN = 11;
-const int LCD_D4 = 10;
-const int LCD_D5 = 8;
-const int LCD_D6 = 7;
-const int LCD_D7 = 6;
+#define LCD_RS 12
+#define LCD_EN 11
+#define LCD_D4 10
+#define LCD_D5 8
+#define LCD_D6 7
+#define LCD_D7 6
 #else
-const int LCD_RS = 6;
-const int LCD_EN = 7;
-const int LCD_D4 = 8;
-const int LCD_D5 = 10;
-const int LCD_D6 = 11;
-const int LCD_D7 = 12;
+#define LCD_RS 6
+#define LCD_EN 7
+#define LCD_D4 8
+#define LCD_D5 10
+#define LCD_D6 11
+#define LCD_D7 12
 #endif
 
 // Global vars
@@ -127,7 +127,6 @@ const int stageLengs[] = {0, 2000, 2000, 2000, 0, 0, 10000, 0, 5000, 0};
 MiniLCD lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 
 void setup() {
-	lcd.begin(16, 2);
 	//Motor
 	pinMode(MOTOR_PWM_PIN, OUTPUT);
 	pinMode(MOTOR_RELAY_PIN, OUTPUT);
@@ -162,9 +161,9 @@ void setup() {
 	digitalWrite(GREEN_LED, LOW);
 	
 	lcd.begin(16, 2);
-	lcd.print(F("N Eisenbahn v0.2"));
+	lcd.print(F("N Eisenbahn v0.3"));
 	lcd.setCursor(0, 1);
-	lcd.print(F("von Roman & Vad"));
+	lcd.print(F("Roman&Vaddieg"));
 	delay(2000);
 	
 	//Serial.begin(9600);
@@ -315,7 +314,10 @@ void pollButtons() {
 			return;
 		}
 		toggleSwitch();
-		whistleBlast(1500); //During the whistle sensor is inactive
+		if (abs(pwmDuty) < MOTOR_CUTOFF) 
+			whistleBlast(1500); //During the whistle sensor can't work
+		else
+			playHorn();
 	}
 
 	analogReference(DEFAULT);

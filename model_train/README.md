@@ -9,6 +9,7 @@ Demo mode is tuned for my specific track setup, but manual mode is useful with a
 - Detecting rail current and short circuit protection
 - Kiosk/demo mode
 - Simulated station whistle sound
+- Train horn PCM playback using Timer 2
 - 9-16V DC power supply
 
 ## Hardware
@@ -26,7 +27,7 @@ Demo mode is tuned for my specific track setup, but manual mode is useful with a
 - 3x 2N2222
 - 1x 470uF 25V
 - 1x 100uF 16V
-- 1x 5nF
+- 1x 5nF ceramic capacitor
 - 3x 1N4001 diodes
 - 1x 10k potentiometer
 - header pins
@@ -34,7 +35,7 @@ Demo mode is tuned for my specific track setup, but manual mode is useful with a
 - 5.5mm DC power jack
 - wires
 
-### Sensor board:
+### Sensor board (no PCB layout yet)
 - TOS xxx IR sensor for 36kHz or 38kHz
 - IR LED
 - 15kΩ
@@ -42,4 +43,4 @@ Demo mode is tuned for my specific track setup, but manual mode is useful with a
 ## Supported equipment:
 - Analog trains in scale HO, TT or N
 - Electromagnetic rail switchers
-- LED traffic lights
+- LED traffic lights (external resistors required)

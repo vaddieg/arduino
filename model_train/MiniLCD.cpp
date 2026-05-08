@@ -1,7 +1,8 @@
 #include "MiniLCD.h"
 
 #include <inttypes.h>
-#include "Arduino.h"
+#include <avr/pgmspace.h>
+#include <Arduino.h>
 
 // commands from hitachi HD44780 datasheet
 #define LCD_CLEARDISPLAY 0x01
@@ -246,12 +247,22 @@ uint8_t MiniLCD::write(uint8_t value) {
   return 1; // assume sucess
 }
 
+uint8_t MiniLCD::print(const __FlashStringHelper *ifsh) {
+    PGM_P p = reinterpret_cast<PGM_P>(ifsh);
+
+    uint8_t c;
+    while ((c = pgm_read_byte(p++))) {
+        write(c);  
+    }
+    return 1;
+}
+
 uint8_t MiniLCD::print(const char *str) {
     uint8_t ptr=0;
     while (str[ptr] != '\0' ) {
         write(str[ptr++]);
     }
-    return ptr;
+    return 1;
 }
 
 uint8_t MiniLCD::print(long value) {

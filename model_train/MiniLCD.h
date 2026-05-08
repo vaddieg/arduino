@@ -6,6 +6,7 @@
 // Only 4-bit parallel write-only mode supported
 
 #include <inttypes.h>
+#include <WString.h>
 
 class MiniLCD {
 public:
@@ -36,6 +37,7 @@ public:
   void setCursor(uint8_t, uint8_t); 
   void command(uint8_t);
   
+  uint8_t print(const __FlashStringHelper *ifsh);
   uint8_t print(const char *str);
   uint8_t print(long value);
 private:
